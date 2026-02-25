@@ -1,0 +1,23 @@
+{
+  "name": "@quinn/bot",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --env-file ../../.env --watch src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target bun",
+    "start": "bun --env-file ../../.env dist/index.js",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@quinn/shared": "workspace:*",
+    "discord.js": "^14.0.0",
+    "discordx": "^11.13.3",
+    "groq-sdk": "^0.5.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.0.0"
+  }
+}
