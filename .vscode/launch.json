@@ -1,0 +1,59 @@
+{
+  // Local debugging against Postgres exposed on host port 5433 (docker-compose).
+  // Before first run:
+  //   1. docker compose up postgres        (start just the DB)
+  //   2. bun run scripts/dev-db-setup.ts   (apply init.sql to local DB)
+  //
+  // Uses --inspect so the app starts immediately; the VS Code debugger attaches
+  // in the background. Breakpoints, stepping, etc. all work once attached.
+  //
+  // You can launch individual configs, or use "Dev: All" to start everything.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Dev: Server",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "${env:HOME}/.bun/bin/bun",
+      "runtimeArgs": ["--inspect=ws://localhost:6499/bun", "src/index.ts"],
+      "cwd": "${workspaceFolder}/packages/server",
+      "env": {
+        "DATABASE_URL": "postgresql://quinn:changeme@localhost:5433/quinn",
+        "UI_URL": "http://localhost:5173"
+      },
+      "envFile": "${workspaceFolder}/.env",
+      "attachSimplePort": 6499,
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Dev: Bot",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "${env:HOME}/.bun/bin/bun",
+      "runtimeArgs": ["--inspect=ws://localhost:6498/bun", "src/index.ts"],
+      "cwd": "${workspaceFolder}/packages/bot",
+      "env": {
+        "DATABASE_URL": "postgresql://quinn:changeme@localhost:5433/quinn",
+        "SERVER_URL": "http://localhost:3000"
+      },
+      "envFile": "${workspaceFolder}/.env",
+      "attachSimplePort": 6498,
+      "console": "integratedTerminal"
+    },
+    {
+      "name": "Dev: UI (Vite)",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "${env:HOME}/.bun/bin/bun",
+      "runtimeArgs": ["vite"],
+      "cwd": "${workspaceFolder}/packages/ui",
+      "console": "integratedTerminal"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Dev: All",
+      "configurations": ["Dev: Server", "Dev: Bot", "Dev: UI (Vite)"]
+    }
+  ]
+}
