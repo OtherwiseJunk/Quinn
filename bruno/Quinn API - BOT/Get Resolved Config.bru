@@ -1,0 +1,15 @@
+meta {
+  name: Get Resolved Config
+  type: http
+  seq: 1
+}
+
+get {
+  url: http://localhost:3000/api/bot/guilds/{{GuildId}}/channels/{{ChannelId}}/resolved-config
+  body: none
+  auth: inherit
+}
+
+settings {
+  encodeUrl: true
+}
