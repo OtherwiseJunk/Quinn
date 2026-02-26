@@ -8,6 +8,11 @@
     "build": "bun run --filter '*' build",
     "dev": "bun run --filter '*' dev",
     "test": "bun run --filter '*' test",
-    "typecheck": "bun run --filter '*' typecheck"
+    "typecheck": "bun run --filter '*' typecheck",
+    "lint": "oxlint --config .oxlintrc.json --ignore-path .gitignore packages/",
+    "lint:fix": "oxlint --config .oxlintrc.json --ignore-path .gitignore --fix packages/"
+  },
+  "devDependencies": {
+    "oxlint": "^1.50.0"
   }
 }
