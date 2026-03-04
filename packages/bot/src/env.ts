@@ -9,4 +9,7 @@ export const env = {
   internalBotSecret: require("INTERNAL_BOT_SECRET"),
   serverUrl: require("SERVER_URL"),
   groqApiKey: require("GROQ_API_KEY"),
+  e2bApiKey: process.env.E2B_API_KEY || undefined,
 };
+
+console.log(`[Quinn] E2B code execution: ${env.e2bApiKey ? "enabled" : "disabled (E2B_API_KEY not set)"}`);
