@@ -91,6 +91,18 @@ export async function isForbiddenUser(
   return data.forbidden;
 }
 
+export async function getForbiddenUserIds(
+  guildId: string,
+  userIds: string[]
+): Promise<Set<string>> {
+  if (userIds.length === 0) return new Set();
+  const data = await post<{ forbiddenIds: string[] }>(
+    `/guilds/${guildId}/forbidden-users/batch`,
+    { userIds }
+  );
+  return new Set(data.forbiddenIds);
+}
+
 export async function getUserContext(
   userId: string
 ): Promise<UserContext | null> {
