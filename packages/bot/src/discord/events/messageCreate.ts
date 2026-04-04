@@ -7,9 +7,10 @@ import { processMessage } from "../../pipeline/messageProcessor.js";
 export class MessageCreateEvent {
   @On({ event: "messageCreate" })
   async onMessage([message]: ArgsOf<"messageCreate">): Promise<void> {
-    // Ignore bots and DMs
+    // Ignore bots, DMs, and developer comments (//)
     if (message.author.bot) return;
     if (!message.guild) return;
+    if (message.content.startsWith("//")) return;
 
     const botUser = message.client.user;
     if (!botUser) return;
