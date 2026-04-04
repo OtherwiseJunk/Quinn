@@ -175,11 +175,12 @@ export async function reportUsage(record: {
 }
 
 export async function getPendingConsolidation(
-  guildId: string
+  guildId: string,
+  maxCount: number
 ): Promise<{ subjectUserId: string | null; memories: BotMemory[] }[]> {
   const data = await get<{
     groups: { subjectUserId: string | null; memories: BotMemory[] }[];
-  }>(`/guilds/${guildId}/memories/pending-consolidation`);
+  }>(`/guilds/${guildId}/memories/pending-consolidation?maxCount=${maxCount}`);
   return data.groups;
 }
 
@@ -194,4 +195,11 @@ export async function consolidateMemories(
     deleteIds,
     merged,
   });
+}
+
+export async function getTimeoutStatus(
+  guildId: string,
+  userId: string,
+): Promise<{ isTimedOut: boolean; expiresAt: string | null; level: number | null; nextDecayAt: string | null }> {
+  return get(`/guilds/${guildId}/timeouts/${userId}`);
 }
