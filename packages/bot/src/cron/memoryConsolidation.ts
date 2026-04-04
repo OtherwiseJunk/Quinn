@@ -9,9 +9,9 @@ interface ConsolidationResponse {
   discard: number[];
   merged: { replaces: number[]; content: string }[];
 }
-const MAX_MEMORIES_PER_GROUP = 50;
-const TARGET_MEMORIES_PER_GROUP = 30;
-const TARGET_MAX_MEMORIES_PER_GROUP = 40;
+const MAX_MEMORIES_PER_GROUP = 20;
+const TARGET_MEMORIES_PER_GROUP = 10;
+const TARGET_MAX_MEMORIES_PER_GROUP = 15;
 
 const LOG = "[Consolidation]";
 
@@ -158,7 +158,7 @@ export async function runConsolidation(client: Client): Promise<void> {
       const guildName = guilds.get(guildId)?.name ?? guildId;
       try {
         console.log(`${LOG} [${guildId}] Fetching pending consolidation for "${guildName}"...`);
-        const groups = await getPendingConsolidation(guildId);
+        const groups = await getPendingConsolidation(guildId, MAX_MEMORIES_PER_GROUP);
 
         if (groups.length === 0) {
           console.log(`${LOG} [${guildId}] No groups over threshold — nothing to do`);
