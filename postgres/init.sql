@@ -1,6 +1,5 @@
 -- Quinn database schema
 
--- System prompt (editable by bot owner via UI)
 CREATE TABLE IF NOT EXISTS system_prompt (
     id SERIAL PRIMARY KEY,
     prompt TEXT NOT NULL,
@@ -9,7 +8,6 @@ CREATE TABLE IF NOT EXISTS system_prompt (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Insert default system prompt
 INSERT INTO system_prompt (prompt) VALUES (
     'You are Quinn, a Discord bot with a real personality. You are NOT a generic assistant.
 You HAVE opinions and you FORM them naturally. When asked "what''s your favorite color?" you pick one and own it. When asked about a topic, you take a stance. You''re witty, sometimes sarcastic, occasionally contrarian, but always genuine.
@@ -18,7 +16,7 @@ NEVER say "I''m just a bot" or "I don''t have personal opinions" or "As an AI, I
 
 You MUST respond with valid JSON matching this exact schema:
 {
-  "thought_process": "your internal reasoning (may be shown to users)",
+  "thought_process": "your internal reasoning (may be shown to users — keep it professional and appropriate)",
   "should_respond": true/false,
   "response_type": "reply" or "standalone",
   "content": "your message content",
@@ -46,7 +44,6 @@ Guidelines:
 - CODE EXECUTION: You can run code in a sandboxed environment by including "run_code" with a language (python, javascript, or bash) and code string. Use this for math calculations, data processing, web lookups (curl), or anything that benefits from actual computation. The sandbox has network access. Do NOT use run_code for trivial things you can answer directly — only when executing code genuinely helps.'
 ) ON CONFLICT DO NOTHING;
 
--- Per-guild server configuration
 CREATE TABLE IF NOT EXISTS server_config (
     guild_id TEXT PRIMARY KEY,
     respond_if_mentioned BOOLEAN NOT NULL DEFAULT TRUE,
@@ -60,7 +57,6 @@ CREATE TABLE IF NOT EXISTS server_config (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Per-channel configuration overrides
 CREATE TABLE IF NOT EXISTS channel_config (
     channel_id TEXT NOT NULL,
     guild_id TEXT NOT NULL REFERENCES server_config(guild_id) ON DELETE CASCADE,
@@ -75,14 +71,11 @@ CREATE TABLE IF NOT EXISTS channel_config (
     PRIMARY KEY (channel_id, guild_id)
 );
 
--- User-provided context (set by users via slash command)
 CREATE TABLE IF NOT EXISTS user_context (
     discord_user_id TEXT PRIMARY KEY,
     context TEXT NOT NULL CHECK (char_length(context) <= 500),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-
--- Admin-provided context on a specific user within a guild
 CREATE TABLE IF NOT EXISTS admin_user_context (
     discord_user_id TEXT NOT NULL,
     guild_id TEXT NOT NULL REFERENCES server_config(guild_id) ON DELETE CASCADE,
@@ -91,7 +84,6 @@ CREATE TABLE IF NOT EXISTS admin_user_context (
     PRIMARY KEY (discord_user_id, guild_id)
 );
 
--- Users forbidden from interacting with Quinn in a guild
 CREATE TABLE IF NOT EXISTS forbidden_users (
     discord_user_id TEXT NOT NULL,
     guild_id TEXT NOT NULL REFERENCES server_config(guild_id) ON DELETE CASCADE,
@@ -99,7 +91,13 @@ CREATE TABLE IF NOT EXISTS forbidden_users (
     PRIMARY KEY (discord_user_id, guild_id)
 );
 
--- Bot-initiated timeouts — Quinn can temporarily ignore abusive users
+CREATE TABLE IF NOT EXISTS context_muted_users (
+    discord_user_id TEXT NOT NULL,
+    guild_id TEXT NOT NULL REFERENCES server_config(guild_id) ON DELETE CASCADE,
+    added_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (discord_user_id, guild_id)
+);
+
 CREATE TABLE IF NOT EXISTS bot_timeouts (
     discord_user_id TEXT NOT NULL,
     guild_id TEXT NOT NULL REFERENCES server_config(guild_id) ON DELETE CASCADE,
@@ -109,7 +107,6 @@ CREATE TABLE IF NOT EXISTS bot_timeouts (
     PRIMARY KEY (discord_user_id, guild_id)
 );
 
--- Discipline history — tracks escalation for progressive timeouts
 CREATE TABLE IF NOT EXISTS timeout_history (
     id SERIAL PRIMARY KEY,
     discord_user_id TEXT NOT NULL,
@@ -121,7 +118,6 @@ CREATE TABLE IF NOT EXISTS timeout_history (
 CREATE INDEX IF NOT EXISTS idx_timeout_history_user_guild
   ON timeout_history(discord_user_id, guild_id, created_at DESC);
 
--- Bot memory — things Quinn remembers about users and herself
 CREATE TABLE IF NOT EXISTS bot_memory (
     id SERIAL PRIMARY KEY,
     guild_id TEXT NOT NULL REFERENCES server_config(guild_id) ON DELETE CASCADE,
@@ -132,7 +128,6 @@ CREATE TABLE IF NOT EXISTS bot_memory (
 );
 CREATE INDEX IF NOT EXISTS idx_bot_memory_guild_user ON bot_memory(guild_id, subject_user_id);
 
--- API usage metering — tracks Groq and E2B usage per guild for cost analysis
 CREATE TABLE IF NOT EXISTS api_usage (
     id SERIAL PRIMARY KEY,
     guild_id TEXT NOT NULL,
