@@ -3,3 +3,4 @@ export * from "./types/config.js";
 export * from "./types/user.js";
 export * from "./types/api.js";
 export * from "./types/memory.js";
+export * from "./utils/random.js";
