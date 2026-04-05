@@ -7,6 +7,8 @@ import adminRouter from "./admin.js";
 
 const router = Router();
 
+router.get("/health", (_req, res) => res.json({ status: "ok" }));
+
 router.use("/auth", authRouter);
 router.use("/user", userRouter);
 router.use("/guilds/:guildId", guildsRouter);
