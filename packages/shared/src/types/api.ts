@@ -1,5 +1,5 @@
 import type { ServerConfig, ChannelConfig } from "./config.js";
-import type { UserContext, AdminUserContext } from "./user.js";
+import type { UserContext } from "./user.js";
 
 export type UpdateServerConfigRequest = Partial<
   Omit<ServerConfig, "guildId">

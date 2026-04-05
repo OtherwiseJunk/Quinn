@@ -14,8 +14,12 @@ export interface QuinnResponse {
   reaction_emoji: string;
   new_memories?: string[];
   new_self_memories?: string[];
-  /** Timeout the user for N hours (bot-initiated, auto-expires) */
-  timeout_user?: 1 | 4 | 8;
+  delete_memories?: number[];
+  update_memories?: { id: number; content: string }[];
+  /** Request discipline for the triggering user (server handles escalation) */
+  timeout_user?: boolean;
+  /** Request sandboxed code execution (E2B) — triggers a second Groq pass */
+  run_code?: { language: "python" | "javascript" | "bash"; code: string };
 }
 
 /** The system-level prompt context passed to Groq on every request */
