@@ -9,6 +9,13 @@ export interface ConfiguredUser {
   isContextMuted: boolean;
 }
 
+export interface TimeoutStatus {
+  isTimedOut: boolean;
+  expiresAt: string | null;
+  level: number | null;
+  nextDecayAt: string | null;
+}
+
 export const guildUsersApi = {
   getConfiguredUsers: (guildId: string) =>
     api.get<ConfiguredUser[]>(`/guilds/${guildId}/configured-users`),
@@ -36,4 +43,9 @@ export const guildUsersApi = {
     api.get<{ muted: boolean }>(`/guilds/${guildId}/users/${userId}/context-muted`),
   setContextMuted: (guildId: string, userId: string, muted: boolean) =>
     api.put<{ muted: boolean }>(`/guilds/${guildId}/users/${userId}/context-muted`, { muted }),
+
+  getTimeoutStatus: (guildId: string, userId: string) =>
+    api.get<TimeoutStatus>(`/guilds/${guildId}/users/${userId}/timeout-status`),
+  updateTimeoutStatus: (guildId: string, userId: string, active: boolean, level: number) =>
+    api.put<TimeoutStatus>(`/guilds/${guildId}/users/${userId}/timeout-status`, { active, level }),
 };
