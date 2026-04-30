@@ -2,7 +2,7 @@ import { ref } from "vue";
 import { defineStore } from "pinia";
 import type { ForbiddenUser, AdminUserContext } from "@quinn/shared";
 import { guildUsersApi } from "../api/guildUsers.js";
-import type { ConfiguredUser } from "../api/guildUsers.js";
+import type { ConfiguredUser, TimeoutStatus } from "../api/guildUsers.js";
 
 function contextKey(guildId: string, userId: string) {
   return `${guildId}:${userId}`;
@@ -14,6 +14,7 @@ export const useGuildUsersStore = defineStore("guildUsers", () => {
   const contextMuted = ref(new Map<string, boolean>());
   const configuredUsers = ref(new Map<string, ConfiguredUser[]>());
   const displayNames = ref(new Map<string, string>());
+  const timeoutStatuses = ref(new Map<string, TimeoutStatus | null>());
 
   async function fetchForbidden(guildId: string): Promise<void> {
     const users = await guildUsersApi.listForbidden(guildId);
@@ -65,6 +66,20 @@ export const useGuildUsersStore = defineStore("guildUsers", () => {
     return contextMuted.value.get(contextKey(guildId, userId)) ?? false;
   }
 
+  async function fetchTimeoutStatus(guildId: string, userId: string): Promise<void> {
+    const status = await guildUsersApi.getTimeoutStatus(guildId, userId);
+    timeoutStatuses.value.set(contextKey(guildId, userId), status);
+  }
+
+  async function saveTimeoutStatus(guildId: string, userId: string, active: boolean, level: number): Promise<void> {
+    const updated = await guildUsersApi.updateTimeoutStatus(guildId, userId, active, level);
+    timeoutStatuses.value.set(contextKey(guildId, userId), updated);
+  }
+
+  function getTimeoutStatus(guildId: string, userId: string): TimeoutStatus | null | undefined {
+    return timeoutStatuses.value.get(contextKey(guildId, userId));
+  }
+
   async function fetchDisplayName(guildId: string, userId: string): Promise<void> {
     const res = await guildUsersApi.getDisplayName(guildId, userId);
     displayNames.value.set(contextKey(guildId, userId), res.displayName);
@@ -97,5 +112,8 @@ export const useGuildUsersStore = defineStore("guildUsers", () => {
     fetchContextMuted,
     setContextMuted,
     isContextMuted,
+    fetchTimeoutStatus,
+    saveTimeoutStatus,
+    getTimeoutStatus,
   };
 });

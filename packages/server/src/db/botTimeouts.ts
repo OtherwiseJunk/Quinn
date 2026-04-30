@@ -219,3 +219,26 @@ export async function decayDiscipline(): Promise<{ decremented: number; deleted:
   }
   return { decremented: decCount, deleted: delCount };
 }
+
+export async function clearBotTimeout(
+  discordUserId: string,
+  guildId: string
+): Promise<void> {
+  await pool.query(
+    `DELETE FROM bot_timeouts WHERE discord_user_id = $1 AND guild_id = $2`,
+    [discordUserId, guildId]
+  );
+  cache.delete(cacheKey(discordUserId, guildId));
+}
+
+export async function setDisciplineLevel(
+  discordUserId: string,
+  guildId: string,
+  level: 0 | 1 | 2 | 3
+): Promise<void> {
+  await pool.query(
+    `INSERT INTO timeout_history (discord_user_id, guild_id, level)
+     VALUES ($1, $2, $3)`,
+    [discordUserId, guildId, level]
+  );
+}

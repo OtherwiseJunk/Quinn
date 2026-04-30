@@ -12,6 +12,7 @@ import { getAdminUserContext, upsertAdminUserContext, deleteAdminUserContext } f
 import { listForbiddenUsers, addForbiddenUser, removeForbiddenUser } from "../db/forbiddenUsers.js";
 import { isContextMuted, muteContext, unmuteContext } from "../db/contextMutedUsers.js";
 import { getConfiguredUsers } from "../db/configuredUsers.js";
+import { getTimeoutStatus, clearBotTimeout, setDisciplineLevel } from "../db/botTimeouts.js";
 import { resolveDisplayNames } from "../lib/discordMembers.js";
 import { env } from "../config.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
@@ -166,6 +167,30 @@ router.post("/forbidden-users", asyncHandler(async (req: Request<GuildParams>, r
 router.delete("/forbidden-users/:userId", asyncHandler(async (req: Request<UserParams>, res) => {
   await removeForbiddenUser(req.params.userId, req.params.guildId);
   res.status(204).send();
+}));
+
+// --- Timeout & discipline ---
+
+router.get("/users/:userId/timeout-status", asyncHandler(async (req: Request<UserParams>, res) => {
+  const status = await getTimeoutStatus(req.params.userId, req.params.guildId);
+  res.json(status);
+}));
+
+router.put("/users/:userId/timeout-status", asyncHandler(async (req: Request<UserParams>, res) => {
+  const { active, level } = req.body as { active: boolean; level: number };
+  if (typeof active !== "boolean" || !Number.isInteger(level) || ![0, 1, 2, 3].includes(level)) {
+    res.status(400).json({ error: "active must be boolean, level must be 0–3" });
+    return;
+  }
+  const current = await getTimeoutStatus(req.params.userId, req.params.guildId);
+  if (!active) {
+    await clearBotTimeout(req.params.userId, req.params.guildId);
+  }
+  if (level !== (current.level ?? 0)) {
+    await setDisciplineLevel(req.params.userId, req.params.guildId, level as 0 | 1 | 2 | 3);
+  }
+  const status = await getTimeoutStatus(req.params.userId, req.params.guildId);
+  res.json(status);
 }));
 
 export default router;

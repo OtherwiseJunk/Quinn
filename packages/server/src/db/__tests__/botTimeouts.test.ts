@@ -6,7 +6,7 @@ mock.module("../pool.js", () => ({
   pool: { query: queryMock },
 }));
 
-const { isTimedOut, addTimeout, getEscalationLevel, recordDiscipline, cleanupExpired, decayDiscipline } =
+const { isTimedOut, addTimeout, getEscalationLevel, recordDiscipline, cleanupExpired, decayDiscipline, clearBotTimeout, setDisciplineLevel } =
   await import("../botTimeouts.js");
 
 beforeEach(() => {
@@ -186,5 +186,55 @@ describe("decayDiscipline", () => {
     // Second call should be the UPDATE (decrement)
     const updateCall = queryMock.mock.calls[1][0] as string;
     expect(updateCall).toContain("UPDATE");
+  });
+});
+
+describe("clearBotTimeout", () => {
+  it("issues a DELETE with the correct user+guild params", async () => {
+    queryMock.mockResolvedValueOnce({ rowCount: 1 });
+    await clearBotTimeout("u1", "g1");
+    expect(queryMock).toHaveBeenCalledTimes(1);
+    const [sql, params] = queryMock.mock.calls[0];
+    expect((sql as string).toUpperCase()).toContain("DELETE");
+    expect(params).toEqual(["u1", "g1"]);
+  });
+
+  it("invalidates the cache so the next isTimedOut call re-queries the DB", async () => {
+    // prime the cache via isTimedOut (uses a unique user ID to avoid cache collision)
+    queryMock.mockResolvedValueOnce({ rows: [{ "1": 1 }] });
+    await isTimedOut("u-clear", "g-clear");
+    queryMock.mockReset();
+
+    // clear the timeout
+    queryMock.mockResolvedValueOnce({ rowCount: 1 });
+    await clearBotTimeout("u-clear", "g-clear");
+    queryMock.mockReset();
+
+    // next isTimedOut must re-query the DB (cache miss), not return cached true
+    queryMock.mockResolvedValueOnce({ rows: [] });
+    const result = await isTimedOut("u-clear", "g-clear");
+    expect(queryMock).toHaveBeenCalledTimes(1);
+    expect(result).toBe(false);
+  });
+});
+
+describe("setDisciplineLevel", () => {
+  it("inserts a timeout_history row with the given level", async () => {
+    queryMock.mockResolvedValueOnce({ rows: [] });
+    await setDisciplineLevel("u1", "g1", 2);
+    expect(queryMock).toHaveBeenCalledTimes(1);
+    const [sql, params] = queryMock.mock.calls[0];
+    expect((sql as string).toUpperCase()).toContain("INSERT");
+    expect((sql as string).toLowerCase()).toContain("timeout_history");
+    expect(params).toEqual(["u1", "g1", 2]);
+  });
+
+  it("accepts all valid levels 0–3", async () => {
+    for (const level of [0, 1, 2, 3] as const) {
+      queryMock.mockResolvedValueOnce({ rows: [] });
+      await setDisciplineLevel("u1", "g1", level);
+      expect(queryMock.mock.calls.at(-1)![1][2]).toBe(level);
+      queryMock.mockReset();
+    }
   });
 });
