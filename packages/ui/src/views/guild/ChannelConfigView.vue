@@ -14,6 +14,7 @@ import { useCurrentGuild } from "../../composables/useCurrentGuild.js";
 import { useSaveState } from "../../composables/useSaveState.js";
 import { useAuthStore } from "../../stores/auth.js";
 import GuildSelectorDropdown from "../../components/guild/GuildSelectorDropdown.vue";
+import { channelsApi } from "../../api/channels.js";
 import type { ChannelConfig } from "@quinn/shared";
 
 const auth = useAuthStore();
@@ -24,6 +25,7 @@ const route = useRoute();
 const router = useRouter();
 const { status, errorMessage, save } = useSaveState();
 const showConfirm = ref(false);
+const channelName = ref<string | null>(null);
 
 const channelId = route.params.channelId as string;
 
@@ -47,6 +49,11 @@ onMounted(async () => {
     Object.assign(form, config);
     localRate.value = config.responseRate ?? 25;
   }
+  channelsApi.listDiscord(guildId.value)
+    .then((channels) => {
+      channelName.value = channels.find((c) => c.id === channelId)?.name ?? null;
+    })
+    .catch(() => {});
 });
 
 async function submit() {
@@ -75,7 +82,10 @@ async function deleteConfig() {
       <StatusBadge :status="status" :error="errorMessage" />
     </div>
     <div class="channel-header">
-      <h1 class="page-title"># {{ channelId }}</h1>
+      <h1 class="page-title">
+        # {{ channelName ?? channelId }}
+        <span v-if="channelName" class="page-title__id">({{ channelId }})</span>
+      </h1>
       <p class="page-desc">Channel overrides — null fields inherit from server config.</p>
     </div>
 
@@ -83,10 +93,10 @@ async function deleteConfig() {
       <section class="section">
         <h2 class="section__title">Response Behavior</h2>
         <AppToggle v-model="form.respondIfMentioned" label="Respond when mentioned" :nullable="true" />
-        <AppToggle v-model="form.respondToAll" label="Respond to all messages" :nullable="true" />
         <AppToggle v-model="form.displayThoughts" label="Display thoughts" :nullable="true" />
+        <AppToggle v-model="form.respondToAll" label="Chance to respond to any message" :nullable="true" />
 
-        <div class="slider-nullable">
+        <div v-if="form.respondToAll === true" class="slider-nullable">
           <AppToggle
             :model-value="form.responseRate !== null"
             label="Override response rate"
@@ -143,6 +153,7 @@ async function deleteConfig() {
 .page-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
 .channel-header { margin-bottom: 1.5rem; }
 .page-title { margin: 0; font-size: 1.5rem; font-weight: 700; color: #fff; font-family: monospace; }
+.page-title__id { font-size: 0.875rem; font-weight: 400; color: #666; font-family: monospace; }
 .page-desc { margin: 0.25rem 0 0; font-size: 0.8rem; color: #666; }
 .form { display: flex; flex-direction: column; gap: 1.5rem; max-width: 640px; }
 .section { display: flex; flex-direction: column; gap: 0; background: #111214; border: 1px solid #2b2c30; border-radius: 10px; padding: 1rem 1.25rem; }
