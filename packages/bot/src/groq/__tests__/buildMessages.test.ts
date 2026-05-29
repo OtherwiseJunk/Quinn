@@ -24,6 +24,8 @@ function fakeMessage(
     content,
     author: { id: authorId, displayName, username: displayName },
     member: { displayName },
+    attachments: new Map(),
+    embeds: [],
   } as any;
 }
 
@@ -158,7 +160,7 @@ describe("buildMessages", () => {
     expect((memoryMsg as any).content).toContain(`[#${mem.id}, saved 2024-01-15]`);
   });
 
-  it("maps bot messages to assistant role, others to user role with displayName: content", () => {
+  it("maps bot messages to assistant role, others to user role with authorId: content", () => {
     const history = [
       fakeMessage("h1", "u1", "Hey Quinn", "Alice"),
       fakeMessage("h2", BOT_ID, "Hey there!"),
@@ -167,7 +169,7 @@ describe("buildMessages", () => {
     const msgs = buildMessages(makeContext(), history, trigger, BOT_ID);
 
     const userMsg = msgs.find(
-      (m) => m.role === "user" && (m as any).content === "Alice: Hey Quinn"
+      (m) => m.role === "user" && (m as any).content === "u1: Hey Quinn"
     );
     expect(userMsg).toBeDefined();
 
@@ -202,7 +204,7 @@ describe("buildMessages", () => {
 
     const lastMsg = msgs[msgs.length - 1];
     expect(lastMsg.role).toBe("user");
-    expect((lastMsg as any).content).toBe("Alice: Hello!");
+    expect((lastMsg as any).content).toBe("u1: Hello!");
   });
 
   it("does not duplicate trigger if already in history", () => {
@@ -211,7 +213,7 @@ describe("buildMessages", () => {
     const msgs = buildMessages(makeContext(), history, trigger, BOT_ID);
 
     const matchingMsgs = msgs.filter(
-      (m) => m.role === "user" && (m as any).content === "Alice: Hello!"
+      (m) => m.role === "user" && (m as any).content === "u1: Hello!"
     );
     expect(matchingMsgs).toHaveLength(1);
   });

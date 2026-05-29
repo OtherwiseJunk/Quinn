@@ -29,6 +29,7 @@ import { lock, unlock } from "../lock/channelLock.js";
 import { sampleRandom } from "@quinn/shared";
 import type { QuinnResponse, GroqRequestContext, BotMemory, ResolvedChannelConfig } from "@quinn/shared";
 import type { ChatCompletionMessageParam } from "groq-sdk/resources/chat/completions";
+import { resolveUserPronounSet, replacePronouns, PronounSet } from "./pronounResolver.js";
 
 const MAX_MEMORIES = 15;
 
@@ -401,6 +402,15 @@ export async function processMessage(
     if (codeExec.usage) groqUsages.push(codeExec.usage);
 
     // Side effects
+    const pronounSet = resolveUserPronounSet(context.userContext, message.member ?? null);
+    if (pronounSet !== null && pronounSet !== PronounSet.They && response.thought_process) {
+      response.thought_process = replacePronouns(
+        response.thought_process,
+        pronounSet,
+        PronounSet.They,
+      );
+    }
+
     reportApiUsage(groqUsages, guildId, channelId, message.author.id, label, codeExec.e2bDurationMs, codeExec.e2bSuccess);
 
     if (response.should_react && response.reaction_emoji) {

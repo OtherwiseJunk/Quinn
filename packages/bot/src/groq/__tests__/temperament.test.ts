@@ -33,10 +33,10 @@ describe("temperament", () => {
     expect(temp).toBeCloseTo(0.7 + 2 * 0.06, 5);
   });
 
-  it("caps at 1.3 (MAX_TEMP)", () => {
-    for (let i = 0; i < 20; i++) recordMessage();
+  it("caps at 2.0 (MAX_TEMP)", () => {
+    for (let i = 0; i < 22; i++) recordMessage();
     const temp = getTemperature();
-    expect(temp).toBe(1.3);
+    expect(temp).toBe(2.0);
   });
 
   it("prunes messages older than 10 minutes", () => {
