@@ -26,23 +26,23 @@ function selectOne<T>(items: T[]): T {
 }
 
 function parseSlashString(s: string): PronounSet[] {
-  const sets: PronounSet[] = [];
+  const seen = new Set<PronounSet>();
   for (const token of s.toLowerCase().split("/")) {
     const set = SUBJECT_TO_SET[token.trim()];
-    if (set !== undefined && !sets.includes(set)) sets.push(set);
+    if (set !== undefined) seen.add(set);
   }
-  return sets;
+  return [...seen];
 }
 
 function parseContext(context: string): PronounSet[] | "any" | null {
   if (ANY_CONTEXT_RE.test(context)) return "any";
-  const sets: PronounSet[] = [];
+  const seen = new Set<PronounSet>();
   for (const match of context.matchAll(SLASH_PAIR_RE)) {
     for (const set of parseSlashString(match[0])) {
-      if (!sets.includes(set)) sets.push(set);
+      seen.add(set);
     }
   }
-  return sets.length > 0 ? sets : null;
+  return seen.size > 0 ? [...seen] : null;
 }
 
 function parseRoles(member: GuildMember): PronounSet[] | "any" | null {
@@ -50,13 +50,13 @@ function parseRoles(member: GuildMember): PronounSet[] | "any" | null {
   for (const name of names) {
     if (ANY_ROLE_RE.test(name.trim())) return "any";
   }
-  const sets: PronounSet[] = [];
+  const seen = new Set<PronounSet>();
   for (const name of names) {
     for (const set of parseSlashString(name)) {
-      if (!sets.includes(set)) sets.push(set);
+      seen.add(set);
     }
   }
-  return sets.length > 0 ? sets : null;
+  return seen.size > 0 ? [...seen] : null;
 }
 
 function resolve(signal: PronounSet[] | "any"): PronounSet {
