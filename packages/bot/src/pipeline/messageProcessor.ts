@@ -403,7 +403,7 @@ export async function processMessage(
 
     // Side effects
     const pronounSet = resolveUserPronounSet(context.userContext, message.member ?? null);
-    if (pronounSet !== null && response.thought_process) {
+    if (pronounSet !== null && pronounSet !== PronounSet.They && response.thought_process) {
       response.thought_process = replacePronouns(
         response.thought_process,
         pronounSet,

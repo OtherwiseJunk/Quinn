@@ -17,8 +17,9 @@ const SUBJECT_TO_SET: Record<string, PronounSet> = {
 
 const ANY_POOL: PronounSet[] = [PronounSet.He, PronounSet.She, PronounSet.They, PronounSet.It];
 
-const SLASH_PAIR_RE = /\b(she|he|they|it|ey|xe|fae|per|xir)(\/\w+)+/gi;
-const ANY_CONTEXT_RE = /\bany\s+pronouns?\b|pronouns?\s*[:=]\s*any\b/i;
+// Negative lookbehind prevents matching pronoun subjects that follow "/" (e.g. URLs like pronouns.page/she/her)
+const SLASH_PAIR_RE = /(?<![/\w])(she|he|they|it|ey|xe|fae|per|xir)(\/\w+)+/gi;
+const ANY_CONTEXT_RE = /\bany\s+pronouns?\b|pronouns?\s*(?:[:=]|are)\s*any\b/i;
 const ANY_ROLE_RE = /^any(\s+pronouns?)?$/i;
 
 function selectOne<T>(items: T[]): T {
@@ -52,8 +53,11 @@ function parseRoles(member: GuildMember): PronounSet[] | "any" | null {
   }
   const seen = new Set<PronounSet>();
   for (const name of names) {
-    for (const set of parseSlashString(name)) {
-      seen.add(set);
+    // Require the subject pronoun to be at the start of the role name so that
+    // slash-style category roles like "Support/they" don't falsely match.
+    const match = name.trim().match(/^(she|he|they|it|ey|xe|fae|per|xir)(\/\w+)+$/i);
+    if (match) {
+      for (const set of parseSlashString(match[0])) seen.add(set);
     }
   }
   return seen.size > 0 ? [...seen] : null;
