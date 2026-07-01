@@ -185,7 +185,10 @@ export function validateToolCall(name: string, rawArgs: string): ValidationResul
       }
       return { ok: true, call: { name: "update_memory", args: { id: args.id, content: args.content } } };
     case "timeout":
-      return { ok: true, call: { name: "timeout", args: { reason: typeof args.reason === "string" ? args.reason : "" } } };
+      if (typeof args.reason !== "string" || args.reason.trim() === "") {
+        return { ok: false, error: "timeout requires a non-empty string 'reason'" };
+      }
+      return { ok: true, call: { name: "timeout", args: { reason: args.reason } } };
     case "run_code":
       if (typeof args.language !== "string" || !VALID_LANGUAGES.has(args.language)) {
         return { ok: false, error: "run_code requires language python, javascript, or bash" };

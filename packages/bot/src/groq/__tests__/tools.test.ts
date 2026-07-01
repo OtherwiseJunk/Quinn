@@ -100,4 +100,16 @@ describe("validateToolCall", () => {
     expect(r.ok).toBe(true);
     if (r.ok && r.call.name === "reply") expect(r.call.args.response_type).toBe("reply");
   });
+
+  it("rejects timeout with missing reason", () => {
+    const r = validateToolCall("timeout", JSON.stringify({}));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("reason");
+  });
+
+  it("accepts timeout with a reason", () => {
+    const r = validateToolCall("timeout", JSON.stringify({ reason: "spamming" }));
+    expect(r.ok).toBe(true);
+    if (r.ok && r.call.name === "timeout") expect(r.call.args.reason).toBe("spamming");
+  });
 });
