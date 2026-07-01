@@ -9,9 +9,10 @@ mock.module("@e2b/code-interpreter", () => ({
   Sandbox: { create: mock() },
 }));
 
-const { isThoughtMessage, buildMessages, buildSecondPassMessages } = await import("../buildMessages.js");
+const { isThoughtMessage, buildMessages, buildSecondPassMessages, stripImages } = await import("../buildMessages.js");
 import type { GroqRequestContext, BotMemory } from "@quinn/shared";
 import type { CodeResult } from "../../e2b/sandbox.js";
+import type { ChatCompletionMessageParam } from "groq-sdk/resources/chat/completions";
 
 function fakeMessage(
   id: string,
@@ -54,6 +55,65 @@ function makeBotMemory(content: string, createdAt?: Date): BotMemory {
 
 const BOT_ID = "bot-1";
 
+describe("stripImages", () => {
+  it("replaces image parts with a placeholder and flattens to string", () => {
+    const messages: ChatCompletionMessageParam[] = [
+      { role: "system", content: "prompt" },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "alice: look at this" },
+          { type: "image_url", image_url: { url: "https://cdn.example/img.png" } },
+        ],
+      },
+    ];
+    const stripped = stripImages(messages);
+    expect(stripped[0]).toEqual({ role: "system", content: "prompt" });
+    expect(stripped[1].content).toBe("alice: look at this\n[user posted an image]");
+  });
+
+  it("leaves plain string messages untouched", () => {
+    const messages: ChatCompletionMessageParam[] = [
+      { role: "user", content: "bob: hello" },
+      { role: "assistant", content: "hi bob" },
+    ];
+    expect(stripImages(messages)).toEqual(messages);
+  });
+
+  it("uses one placeholder per image", () => {
+    const messages: ChatCompletionMessageParam[] = [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "carol: two pics" },
+          { type: "image_url", image_url: { url: "https://a/1.png" } },
+          { type: "image_url", image_url: { url: "https://a/2.png" } },
+        ],
+      },
+    ];
+    const stripped = stripImages(messages);
+    expect(stripped[0].content).toBe("carol: two pics\n[user posted an image]\n[user posted an image]");
+  });
+});
+
+describe("slim system message", () => {
+  it("no longer embeds the JSON schema", () => {
+    const context = {
+      systemPrompt: "You are Quinn.",
+      serverPrompt: null,
+      userContext: null,
+      adminUserContext: null,
+      contextMessageLimit: 25,
+    };
+    const messages = buildMessages(context, [], fakeMessage("hello", "u1", "hello"), BOT_ID);
+    const system = messages[0];
+    expect(typeof system.content).toBe("string");
+    expect(system.content as string).not.toContain("should_respond");
+    expect(system.content as string).not.toContain("run_code");
+    expect(system.content as string).toContain("You act by calling tools");
+  });
+});
+
 describe("isThoughtMessage", () => {
   it("returns true for triple-backtick wrapped content", () => {
     const msg = fakeMessage("1", BOT_ID, "```this is a thought```");
@@ -86,16 +146,17 @@ describe("buildMessages", () => {
     expect((msgs[0] as any).content).toContain("Be extra nice");
   });
 
-  it("appends JSON schema reminder when system prompt lacks 'json'", () => {
+  it("appends tool-calling guidance to system prompt", () => {
     const trigger = fakeMessage("t1", "u1", "Hello");
     const msgs = buildMessages(makeContext(), [], trigger, BOT_ID);
-    expect((msgs[0] as any).content).toContain("valid JSON");
+    expect((msgs[0] as any).content).toContain("You act by calling tools");
+    expect((msgs[0] as any).content).toContain("Never answer with plain text");
   });
 
-  it("skips JSON reminder when prompt contains 'json'", () => {
-    const ctx = makeContext({ systemPrompt: "Return json always." });
+  it("does not include JSON schema in slimmed system message", () => {
     const trigger = fakeMessage("t1", "u1", "Hello");
-    const msgs = buildMessages(ctx, [], trigger, BOT_ID);
+    const msgs = buildMessages(makeContext(), [], trigger, BOT_ID);
+    expect((msgs[0] as any).content).not.toContain("should_respond");
     expect((msgs[0] as any).content).not.toContain("valid JSON");
   });
 

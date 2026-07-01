@@ -64,33 +64,27 @@ export function isThoughtMessage(message: Message): boolean {
   return content.startsWith("```") && content.endsWith("```");
 }
 
+/**
+ * Text-only view for non-vision orchestrator models: image parts become
+ * placeholders, array content flattens to a plain string.
+ */
+export function stripImages(messages: ChatCompletionMessageParam[]): ChatCompletionMessageParam[] {
+  return messages.map((m) => {
+    if (!Array.isArray(m.content)) return m;
+    const parts = m.content as Array<{ type: string; text?: string }>;
+    const rendered = parts.map((p) =>
+      p.type === "text" ? (p.text ?? "") : "[user posted an image]"
+    );
+    return { ...m, content: rendered.join("\n") } as ChatCompletionMessageParam;
+  });
+}
+
 function buildSystemMessage(context: GroqRequestContext): ChatCompletionMessageParam {
   let content = context.systemPrompt;
   if (context.serverPrompt) {
     content += `\n\nAdditional instructions from the server admin:\n${context.serverPrompt}`;
   }
-
-  // Groq requires the word "json" in messages when using response_format: json_object.
-  if (!content.toLowerCase().includes("json")) {
-    content += `\n\nYou MUST respond with valid JSON matching this schema:
-{
-  "thought_process": "your internal reasoning (may be shown to users — keep it professional and appropriate)",
-  "should_respond": true/false,
-  "response_type": "reply" or "standalone",
-  "content": "your message content",
-  "should_react": true/false,
-  "reaction_emoji": "emoji to react with (only used if should_react is true)",
-  "new_memories": ["observations about the user (optional)"],
-  "new_self_memories": ["your own opinions/preferences to remember (optional)"],
-  "delete_memories": [id, ...] (optional — remove outdated/wrong memories by ID),
-  "update_memories": [{"id": 42, "content": "corrected text"}] (optional — fix a memory),
-  "timeout_user": true (optional — request discipline for this user),
-  "run_code": {"language": "python"|"javascript"|"bash", "code": "..."} (optional — execute code in a sandbox)
-}`;
-  }
-
-  content += `\n\nIMPORTANT: Only use "run_code" when genuine computation, data processing, or complex logic is required — things you truly cannot do in your head. Never use it for simple arithmetic, string formatting, printing hardcoded values, or restating information you already know. Code execution is expensive; if you can answer without it, do so.`;
-
+  content += `\n\nYou act by calling tools. Every action — replying, reacting, saving memories, running code — is a tool call. If you decide not to respond, simply call no reply tool. Never answer with plain text.`;
   return { role: "system", content };
 }
 
