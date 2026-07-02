@@ -52,7 +52,7 @@ describe("callGroq", () => {
     const result = await callGroq([]);
     expect(result).toHaveProperty("response");
     expect(result).toHaveProperty("usage");
-    expect(result.usage).toEqual({ promptTokens: 10, completionTokens: 20 });
+    expect(result.usage).toEqual({ model: "meta-llama/llama-4-scout-17b-16e-instruct", promptTokens: 10, completionTokens: 20 });
   });
 
   it("defaults usage to 0 when Groq returns no usage", async () => {
@@ -61,7 +61,7 @@ describe("callGroq", () => {
       usage: null,
     });
     const result = await callGroq([]);
-    expect(result.usage).toEqual({ promptTokens: 0, completionTokens: 0 });
+    expect(result.usage).toEqual({ model: "meta-llama/llama-4-scout-17b-16e-instruct", promptTokens: 0, completionTokens: 0 });
   });
 
   it("defaults thought_process to empty string", async () => {

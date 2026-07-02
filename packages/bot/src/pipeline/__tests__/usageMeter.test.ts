@@ -12,7 +12,7 @@ describe("estimateCost", () => {
   });
 
   it("calculates cost for a single Groq call", () => {
-    const usage = [{ promptTokens: 1000, completionTokens: 500 }];
+    const usage = [{ model: "meta-llama/llama-4-scout-17b-16e-instruct", promptTokens: 1000, completionTokens: 500 }];
     const rawCost = 1000 * GROQ_INPUT_RATE + 500 * GROQ_OUTPUT_RATE;
     const expected = rawCost * MULTIPLIER;
     expect(estimateCost(usage)).toBeCloseTo(expected, 10);
@@ -20,8 +20,8 @@ describe("estimateCost", () => {
 
   it("accumulates multiple Groq calls", () => {
     const usages = [
-      { promptTokens: 1000, completionTokens: 200 },
-      { promptTokens: 1500, completionTokens: 300 },
+      { model: "meta-llama/llama-4-scout-17b-16e-instruct", promptTokens: 1000, completionTokens: 200 },
+      { model: "meta-llama/llama-4-scout-17b-16e-instruct", promptTokens: 1500, completionTokens: 300 },
     ];
     const rawCost =
       (1000 + 1500) * GROQ_INPUT_RATE + (200 + 300) * GROQ_OUTPUT_RATE;
@@ -30,7 +30,7 @@ describe("estimateCost", () => {
   });
 
   it("includes E2B cost when durationMs is provided", () => {
-    const usage = [{ promptTokens: 500, completionTokens: 100 }];
+    const usage = [{ model: "meta-llama/llama-4-scout-17b-16e-instruct", promptTokens: 500, completionTokens: 100 }];
     const e2bMs = 5000;
     const rawCost =
       500 * GROQ_INPUT_RATE + 100 * GROQ_OUTPUT_RATE + e2bMs * E2B_RATE_PER_MS;
@@ -39,13 +39,13 @@ describe("estimateCost", () => {
   });
 
   it("ignores E2B when durationMs is 0", () => {
-    const usage = [{ promptTokens: 100, completionTokens: 50 }];
+    const usage = [{ model: "meta-llama/llama-4-scout-17b-16e-instruct", promptTokens: 100, completionTokens: 50 }];
     expect(estimateCost(usage, 0)).toBe(estimateCost(usage));
   });
 
   it("applies profit margin and platform fee correctly", () => {
     // 1M input tokens + 1M output tokens
-    const usage = [{ promptTokens: 1_000_000, completionTokens: 1_000_000 }];
+    const usage = [{ model: "meta-llama/llama-4-scout-17b-16e-instruct", promptTokens: 1_000_000, completionTokens: 1_000_000 }];
     const rawCost = 0.11 + 0.34; // $0.45
     const expected = rawCost * 1.15 * (1 / 0.70);
     expect(estimateCost(usage)).toBeCloseTo(expected, 8);
