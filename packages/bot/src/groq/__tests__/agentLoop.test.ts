@@ -208,3 +208,74 @@ describe("runAgentLoop — edge rules", () => {
     expect(usages.length).toBe(1); // no forced extra call
   });
 });
+
+const SPLIT_OPTS = { orchestratorModel: "gpt-oss", replyModel: "scout" };
+const IMAGE_MESSAGES: ChatCompletionMessageParam[] = [
+  { role: "system", content: "You are Quinn." },
+  {
+    role: "user",
+    content: [
+      { type: "text", text: "alice: look at my dog" },
+      { type: "image_url", image_url: { url: "https://cdn.example/dog.png" } },
+    ],
+  },
+];
+
+describe("runAgentLoop — split mode", () => {
+  it("orchestrator gets text-only view; reply model gets full images", async () => {
+    const m = scriptedModel([
+      { toolCalls: [tc("request_reply", { response_type: "reply" })] },
+      { toolCalls: [tc("reply", { content: "cute dog!", thought: "nice corgi", response_type: "reply" })] },
+    ]);
+    const { actions } = await runAgentLoop(IMAGE_MESSAGES, SPLIT_OPTS, { callModel: m.callModel });
+
+    // turn 1: orchestrator, stripped view, request_reply variant
+    expect(m.requests[0].model).toBe("gpt-oss");
+    expect(m.requests[0].messages[1].content).toBe("alice: look at my dog\n[user posted an image]");
+    expect(m.requests[0].toolNames).toContain("request_reply");
+    expect(m.requests[0].toolNames).not.toContain("reply");
+
+    // turn 2: reply model, full multimodal view, forced reply
+    expect(m.requests[1].model).toBe("scout");
+    expect(Array.isArray(m.requests[1].messages[1].content)).toBe(true);
+    expect(m.requests[1].toolChoice).toBe("required");
+    expect(m.requests[1].toolNames).toEqual(["reply"]);
+
+    expect(actions.reply).toEqual({ content: "cute dog!", thought: "nice corgi", responseType: "reply" });
+  });
+
+  it("passes tool activity to the reply model", async () => {
+    const m = scriptedModel([
+      { toolCalls: [tc("run_code", { language: "python", code: "print(2**10)" })] },
+      { toolCalls: [tc("request_reply", { response_type: "standalone" })] },
+      { toolCalls: [tc("reply", { content: "1024", thought: "ran it", response_type: "reply" })] },
+    ]);
+    const { actions } = await runAgentLoop(BASE, SPLIT_OPTS, {
+      callModel: m.callModel,
+      executeCode: async () => fakeCodeResult({ stdout: "1024" }),
+    });
+    const replyCall = m.requests[2];
+    const activityMsg = replyCall.messages.find(
+      (msg) => msg.role === "user" && typeof msg.content === "string" && msg.content.includes("1024"),
+    );
+    expect(activityMsg).toBeDefined();
+    // request_reply's response_type wins over the reply tool's default
+    expect(actions.reply?.responseType).toBe("standalone");
+  });
+
+  it("silent split turns never invoke the reply model", async () => {
+    const m = scriptedModel([{ toolCalls: [] }]);
+    const { usages } = await runAgentLoop(BASE, SPLIT_OPTS, { callModel: m.callModel });
+    expect(usages.length).toBe(1);
+    expect(m.requests.every((r) => r.model === "gpt-oss")).toBe(true);
+  });
+
+  it("equal model slots collapse to single-model flow (no stripping, direct reply tool)", async () => {
+    const m = scriptedModel([
+      { toolCalls: [tc("reply", { content: "hi", thought: "t", response_type: "reply" })] },
+    ]);
+    await runAgentLoop(IMAGE_MESSAGES, OPTS, { callModel: m.callModel });
+    expect(Array.isArray(m.requests[0].messages[1].content)).toBe(true); // images intact
+    expect(m.requests[0].toolNames).toContain("reply");
+  });
+});
