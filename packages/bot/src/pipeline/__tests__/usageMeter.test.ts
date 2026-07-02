@@ -50,4 +50,23 @@ describe("estimateCost", () => {
     const expected = rawCost * 1.15 * (1 / 0.70);
     expect(estimateCost(usage)).toBeCloseTo(expected, 8);
   });
+
+  it("prices gpt-oss-120b tokens at its own rate", () => {
+    const scout = estimateCost([{ model: "meta-llama/llama-4-scout-17b-16e-instruct", promptTokens: 1_000_000, completionTokens: 0 }]);
+    const oss = estimateCost([{ model: "openai/gpt-oss-120b", promptTokens: 1_000_000, completionTokens: 0 }]);
+    expect(oss).toBeGreaterThan(scout); // $0.15 vs $0.11 input
+  });
+
+  it("prices unknown models at the scout rate", () => {
+    const known = estimateCost([{ model: "meta-llama/llama-4-scout-17b-16e-instruct", promptTokens: 500, completionTokens: 100 }]);
+    const unknown = estimateCost([{ model: "who/knows", promptTokens: 500, completionTokens: 100 }]);
+    expect(unknown).toBe(known);
+  });
+
+  it("adds a flat fee per web search", () => {
+    const withoutSearch = estimateCost([], undefined, 0);
+    const withSearch = estimateCost([], undefined, 2);
+    expect(withoutSearch).toBe(0);
+    expect(withSearch).toBeGreaterThan(0);
+  });
 });
