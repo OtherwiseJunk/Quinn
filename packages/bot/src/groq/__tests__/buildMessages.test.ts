@@ -9,9 +9,8 @@ mock.module("@e2b/code-interpreter", () => ({
   Sandbox: { create: mock() },
 }));
 
-const { isThoughtMessage, buildMessages, buildSecondPassMessages, stripImages } = await import("../buildMessages.js");
+const { isThoughtMessage, buildMessages, stripImages } = await import("../buildMessages.js");
 import type { GroqRequestContext, BotMemory } from "@quinn/shared";
-import type { CodeResult } from "../../e2b/sandbox.js";
 import type { ChatCompletionMessageParam } from "groq-sdk/resources/chat/completions";
 
 function fakeMessage(
@@ -277,65 +276,5 @@ describe("buildMessages", () => {
       (m) => m.role === "user" && (m as any).content === "u1: Hello!"
     );
     expect(matchingMsgs).toHaveLength(1);
-  });
-});
-
-describe("buildSecondPassMessages", () => {
-  const baseMessages = [
-    { role: "system" as const, content: "You are Quinn." },
-    { role: "user" as const, content: "Alice: What is 2^100?" },
-  ];
-
-  const runCode = { language: "python" as const, code: "print(2**100)" };
-
-  it("starts with all original messages", () => {
-    const result: CodeResult = { success: true, stdout: "1267650600228229401496703205376", stderr: "", durationMs: 100 };
-    const msgs = buildSecondPassMessages(baseMessages, runCode, result);
-
-    expect(msgs[0]).toEqual(baseMessages[0]);
-    expect(msgs[1]).toEqual(baseMessages[1]);
-  });
-
-  it("adds assistant message with code intent", () => {
-    const result: CodeResult = { success: true, stdout: "42", stderr: "", durationMs: 100 };
-    const msgs = buildSecondPassMessages(baseMessages, runCode, result);
-
-    const assistantMsg = msgs[2];
-    expect(assistantMsg.role).toBe("assistant");
-    expect((assistantMsg as any).content).toContain("python");
-    expect((assistantMsg as any).content).toContain("print(2**100)");
-  });
-
-  it("adds user message with execution result and no-recurse instruction", () => {
-    const result: CodeResult = { success: true, stdout: "42", stderr: "", durationMs: 100 };
-    const msgs = buildSecondPassMessages(baseMessages, runCode, result);
-
-    const lastMsg = msgs[msgs.length - 1];
-    expect(lastMsg.role).toBe("user");
-    expect((lastMsg as any).content).toContain("Execution succeeded.");
-    expect((lastMsg as any).content).toContain("Do NOT include \"run_code\"");
-  });
-
-  it("includes error info for failed execution", () => {
-    const result: CodeResult = {
-      success: false,
-      stdout: "",
-      stderr: "Traceback...",
-      error: "NameError: x is not defined",
-      durationMs: 200,
-    };
-    const msgs = buildSecondPassMessages(baseMessages, runCode, result);
-
-    const lastMsg = msgs[msgs.length - 1];
-    expect((lastMsg as any).content).toContain("Execution failed.");
-    expect((lastMsg as any).content).toContain("NameError");
-  });
-
-  it("does not mutate original messages array", () => {
-    const original = [...baseMessages];
-    const result: CodeResult = { success: true, stdout: "ok", stderr: "", durationMs: 100 };
-    buildSecondPassMessages(baseMessages, runCode, result);
-
-    expect(baseMessages).toEqual(original);
   });
 });

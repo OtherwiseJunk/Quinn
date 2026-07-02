@@ -1,8 +1,6 @@
 import type { Message } from "discord.js";
-import type { GroqRequestContext, BotMemory, QuinnResponse } from "@quinn/shared";
+import type { GroqRequestContext, BotMemory } from "@quinn/shared";
 import type { ChatCompletionMessageParam, ChatCompletionContentPart } from "groq-sdk/resources/chat/completions";
-import type { CodeResult } from "../e2b/sandbox.js";
-import { formatCodeResult } from "../e2b/sandbox.js";
 
 function formatDate(date: Date | string): string {
   return new Date(date).toISOString().slice(0, 10);
@@ -190,29 +188,4 @@ export function buildMessages(
     ...historyMessages,
     ...triggerMessage,
   ];
-}
-
-/**
- * Builds a second-pass messages array that includes the original conversation,
- * Quinn's code execution request, and the execution result.
- */
-export function buildSecondPassMessages(
-  originalMessages: ChatCompletionMessageParam[],
-  runCode: NonNullable<QuinnResponse["run_code"]>,
-  codeResult: CodeResult
-): ChatCompletionMessageParam[] {
-  const messages: ChatCompletionMessageParam[] = [...originalMessages];
-
-  messages.push({
-    role: "assistant",
-    content: `I want to run some ${runCode.language} code to help answer this:\n\`\`\`${runCode.language}\n${runCode.code}\n\`\`\``,
-  });
-
-  const formatted = formatCodeResult(runCode.language, runCode.code, codeResult);
-  messages.push({
-    role: "user",
-    content: `${formatted}\n\nInterpret the result above and respond to the user. Do NOT include "run_code" in your response.`,
-  });
-
-  return messages;
 }
