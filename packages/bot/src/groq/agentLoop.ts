@@ -77,6 +77,7 @@ export async function runAgentLoop(
     webSearchEnabled: Boolean(deps.webSearch),
     splitMode,
   });
+  const offeredTools = new Set(tools.map((t) => t.function.name));
 
   const convo: ChatCompletionMessageParam[] = splitMode ? stripImages(messages) : [...messages];
   const actions = emptyActions();
@@ -114,6 +115,12 @@ export async function runAgentLoop(
     for (const rawCall of r.toolCalls) {
       const pushResult = (content: string) =>
         convo.push({ role: "tool", tool_call_id: rawCall.id, content });
+
+      if (!offeredTools.has(rawCall.name)) {
+        console.warn(`[Quinn] agentLoop: tool '${rawCall.name}' was not offered in this request`);
+        pushResult(`Error: tool '${rawCall.name}' is not available. Use one of the offered tools.`);
+        continue;
+      }
 
       const validated = validateToolCall(rawCall.name, rawCall.arguments);
       if (!validated.ok) {
@@ -216,6 +223,13 @@ async function forceReply(
     if (validated.ok && (validated.call.name === "reply" || validated.call.name === "react")) {
       applyActionTool(validated.call, actions);
     }
+  }
+
+  if (actions.reply === undefined) {
+    console.error("[Quinn] agentLoop: forced reply call produced no valid reply — turn will be silent", {
+      content: r.content,
+      toolCalls: r.toolCalls.map((t) => t.name),
+    });
   }
 }
 

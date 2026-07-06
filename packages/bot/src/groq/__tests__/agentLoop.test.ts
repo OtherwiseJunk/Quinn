@@ -279,3 +279,28 @@ describe("runAgentLoop — split mode", () => {
     expect(m.requests[0].toolNames).toContain("reply");
   });
 });
+
+describe("runAgentLoop — unoffered tool rejection", () => {
+  it("rejects a hallucinated reply in split mode and still routes through the reply model", async () => {
+    const m = scriptedModel([
+      { toolCalls: [tc("reply", { content: "orchestrator prose", thought: "t", response_type: "reply" })] },
+      { toolCalls: [tc("request_reply", { response_type: "reply" })] },
+      { toolCalls: [tc("reply", { content: "reply-model prose", thought: "t", response_type: "reply" })] },
+    ]);
+    const { actions } = await runAgentLoop(BASE, SPLIT_OPTS, { callModel: m.callModel });
+    expect(actions.reply?.content).toBe("reply-model prose");
+    // first turn got an error tool result back
+    const second = m.requests[1];
+    const toolMsg = second.messages.find((msg) => msg.role === "tool");
+    expect(toolMsg?.content as string).toContain("not available");
+  });
+
+  it("rejects a hallucinated request_reply in single mode", async () => {
+    const m = scriptedModel([
+      { toolCalls: [tc("request_reply", { response_type: "reply" })] },
+      { toolCalls: [tc("reply", { content: "real reply", thought: "t", response_type: "reply" })] },
+    ]);
+    const { actions } = await runAgentLoop(BASE, OPTS, { callModel: m.callModel });
+    expect(actions.reply?.content).toBe("real reply");
+  });
+});
