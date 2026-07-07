@@ -304,3 +304,90 @@ describe("runAgentLoop — unoffered tool rejection", () => {
     expect(actions.reply?.content).toBe("real reply");
   });
 });
+
+describe("runAgentLoop — post-result reply enforcement", () => {
+  it("uses tool_choice required on the call after a result-producing batch", async () => {
+    const m = scriptedModel([
+      { toolCalls: [tc("run_code", { language: "python", code: "print(1)" })] },
+      { toolCalls: [tc("reply", { content: "done", thought: "t", response_type: "reply" })] },
+    ]);
+    await runAgentLoop(BASE, OPTS, {
+      callModel: m.callModel,
+      executeCode: async () => fakeCodeResult(),
+    });
+    expect(m.requests[0].toolChoice).toBe("auto");
+    expect(m.requests[1].toolChoice).toBe("required");
+  });
+
+  it("forces a reply when the model answers in prose after tool results", async () => {
+    const m = scriptedModel([
+      { toolCalls: [tc("run_code", { language: "python", code: "print(6*7)" })] },
+      { content: "The answer is 42.", toolCalls: [] },
+      { toolCalls: [tc("reply", { content: "42!", thought: "computed it", response_type: "reply" })] },
+    ]);
+    const { actions, usages } = await runAgentLoop(BASE, OPTS, {
+      callModel: m.callModel,
+      executeCode: async () => fakeCodeResult({ stdout: "42" }),
+    });
+    expect(actions.reply?.content).toBe("42!");
+    expect(usages.length).toBe(3);
+    expect(m.requests[2].toolChoice).toBe("required");
+  });
+
+  it("still allows silence when prose arrives with no prior tool activity", async () => {
+    const m = scriptedModel([{ content: "just rambling", toolCalls: [] }]);
+    const { actions, usages } = await runAgentLoop(BASE, OPTS, { callModel: m.callModel });
+    expect(actions.reply).toBeUndefined();
+    expect(usages.length).toBe(1);
+  });
+});
+
+function toolUseFailedError(text: string) {
+  const e = new Error("400 tool_use_failed") as Error & { status: number; error: object };
+  e.status = 400;
+  e.error = { error: { code: "tool_use_failed", failed_generation: text } };
+  return e;
+}
+
+describe("runAgentLoop — tool_use_failed salvage", () => {
+  it("salvages failed_generation as the reply when the post-result call 400s", async () => {
+    let call = 0;
+    const callModel: AgentLoopDeps["callModel"] = async () => {
+      call++;
+      if (call === 1) {
+        return { content: null, toolCalls: [tc("run_code", { language: "python", code: "import math; print(math.sqrt(4))" })], usage: usage() };
+      }
+      throw toolUseFailedError("The square root of 4 is 2.0");
+    };
+    const { actions } = await runAgentLoop(BASE, OPTS, {
+      callModel,
+      executeCode: async () => fakeCodeResult({ stdout: "2.0" }),
+    });
+    expect(actions.reply?.content).toBe("The square root of 4 is 2.0");
+    expect(actions.reply?.thought).toBeTruthy();
+  });
+
+  it("salvages failed_generation when the forced-reply call 400s", async () => {
+    let call = 0;
+    const callModel: AgentLoopDeps["callModel"] = async () => {
+      call++;
+      // 4 result turns exhaust the loop, then the forced call 400s
+      if (call <= 4) {
+        return { content: null, toolCalls: [tc("web_search", { query: `q${call}` })], usage: usage() };
+      }
+      throw toolUseFailedError("Here is what I found.");
+    };
+    const { actions } = await runAgentLoop(BASE, OPTS, {
+      callModel,
+      webSearch: async () => "result",
+    });
+    expect(actions.reply?.content).toBe("Here is what I found.");
+  });
+
+  it("rethrows non-salvageable errors", async () => {
+    const callModel: AgentLoopDeps["callModel"] = async () => {
+      throw new Error("network down");
+    };
+    await expect(runAgentLoop(BASE, OPTS, { callModel })).rejects.toThrow("network down");
+  });
+});
