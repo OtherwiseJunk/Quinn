@@ -259,7 +259,7 @@ export async function runAgentLoop(
   if (needsForcedReply && !(exhausted && actions.timeout === undefined && usages.length === 0)) {
     await forceReply(convo, opts, deps, actions, usages, splitMode);
   } else if (splitMode && replyRequested) {
-    const generated = await generateSplitReply(messages, toolActivity, opts, deps, usages);
+    const generated = await generateSplitReply(messages, toolActivity, actions, opts, deps, usages);
     if (generated) {
       actions.reply = { ...generated, responseType: replyRequested.responseType };
     }
@@ -330,10 +330,23 @@ async function forceReply(
   }
 }
 
-/** Split mode: reply model sees the FULL multimodal messages plus tool activity, and must produce the reply. */
+/** Renders the actions the orchestrator already took this turn, so the reply prose stays consistent with them. */
+function describeActions(actions: ResolvedActions): string[] {
+  const lines: string[] = [];
+  for (const m of actions.rememberSelf) lines.push(`- saved a memory about yourself: "${m}"`);
+  for (const m of actions.rememberUser) lines.push(`- saved a memory about this user: "${m}"`);
+  for (const u of actions.updateMemories) lines.push(`- updated memory #${u.id} to: "${u.content}"`);
+  if (actions.forget.length > 0) lines.push(`- deleted memories: ${actions.forget.map((id) => `#${id}`).join(", ")}`);
+  if (actions.react) lines.push(`- reacted to the message with ${actions.react.emoji}`);
+  if (actions.timeout) lines.push(`- requested discipline for this user (reason: ${actions.timeout.reason})`);
+  return lines;
+}
+
+/** Split mode: reply model sees the FULL multimodal messages plus tool activity and the actions already taken, and must produce the reply. */
 async function generateSplitReply(
   fullMessages: ChatCompletionMessageParam[],
   toolActivity: string[],
+  actions: ResolvedActions,
   opts: AgentLoopOptions,
   deps: AgentLoopDeps,
   usages: GroqUsage[],
@@ -344,15 +357,26 @@ async function generateSplitReply(
     splitMode: false,
   }).filter((t) => t.function.name === "reply");
 
-  const replyMessages: ChatCompletionMessageParam[] = [...fullMessages];
+  const briefing: string[] = [];
   if (toolActivity.length > 0) {
+    briefing.push(toolActivity.join("\n\n"));
+  }
+  const actionLines = describeActions(actions);
+  if (actionLines.length > 0) {
+    briefing.push(
+      `This turn you already took these actions:\n${actionLines.join("\n")}\nYour reply MUST be consistent with them.`
+    );
+  }
+
+  const replyMessages: ChatCompletionMessageParam[] = [...fullMessages];
+  if (briefing.length > 0) {
     replyMessages.push({
       role: "assistant",
       content: "I gathered some information before answering:",
     });
     replyMessages.push({
       role: "user",
-      content: toolActivity.join("\n\n") + "\n\nUse the results above. Call reply with your response now.",
+      content: briefing.join("\n\n") + "\n\nUse the information above. Call reply with your response now.",
     });
   } else {
     replyMessages.push({ role: "user", content: "Call reply with your response now." });

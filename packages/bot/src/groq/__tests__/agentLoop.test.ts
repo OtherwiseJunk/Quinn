@@ -391,3 +391,26 @@ describe("runAgentLoop — tool_use_failed salvage", () => {
     await expect(runAgentLoop(BASE, OPTS, { callModel })).rejects.toThrow("network down");
   });
 });
+
+describe("runAgentLoop — split mode action consistency", () => {
+  it("briefs the reply model on actions the orchestrator already took", async () => {
+    const m = scriptedModel([
+      {
+        toolCalls: [
+          tc("remember", { scope: "self", content: ["My favorite Powerade flavor is Tropical Punch."] }),
+          tc("request_reply", { response_type: "reply" }),
+        ],
+      },
+      { toolCalls: [tc("reply", { content: "Tropical Punch, obviously.", thought: "consistent", response_type: "reply" })] },
+    ]);
+    const { actions } = await runAgentLoop(BASE, SPLIT_OPTS, { callModel: m.callModel });
+
+    const replyCall = m.requests[1];
+    const briefing = replyCall.messages.find(
+      (msg) => msg.role === "user" && typeof msg.content === "string" && msg.content.includes("Tropical Punch"),
+    );
+    expect(briefing).toBeDefined();
+    expect((briefing as any).content).toContain("consistent with them");
+    expect(actions.reply?.content).toBe("Tropical Punch, obviously.");
+  });
+});
