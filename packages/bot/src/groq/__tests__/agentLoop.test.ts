@@ -19,7 +19,7 @@ function usage(): RawCallResult["usage"] {
 
 /** Queue of scripted model turns; records every request it receives. */
 function scriptedModel(turns: Partial<RawCallResult>[]) {
-  const requests: { model: string; messages: ChatCompletionMessageParam[]; toolNames: string[]; toolChoice?: string }[] = [];
+  const requests: { model: string; messages: ChatCompletionMessageParam[]; toolNames: string[]; toolChoice?: import("../agentLoop.js").LoopToolChoice }[] = [];
   let i = 0;
   const callModel: AgentLoopDeps["callModel"] = async (model, messages, tools, toolChoice) => {
     requests.push({ model, messages, toolNames: tools.map((t) => t.function.name), toolChoice });
@@ -186,8 +186,8 @@ describe("runAgentLoop — edge rules", () => {
     expect(actions.reply?.content).toBe("final answer");
     expect(usages.length).toBe(5); // 4 loop calls + 1 forced
     const forced = m.requests[4];
-    expect(forced.toolChoice).toBe("required");
-    expect(forced.toolNames.toSorted()).toEqual(["react", "reply"]);
+    expect(forced.toolChoice).toEqual({ type: "function", function: { name: "reply" } });
+    expect(forced.toolNames).toEqual(["reply"]);
   });
 
   it("forces a reply when timeout is requested without one", async () => {
@@ -238,7 +238,7 @@ describe("runAgentLoop — split mode", () => {
     // turn 2: reply model, full multimodal view, forced reply
     expect(m.requests[1].model).toBe("scout");
     expect(Array.isArray(m.requests[1].messages[1].content)).toBe(true);
-    expect(m.requests[1].toolChoice).toBe("required");
+    expect(m.requests[1].toolChoice).toEqual({ type: "function", function: { name: "reply" } });
     expect(m.requests[1].toolNames).toEqual(["reply"]);
 
     expect(actions.reply).toEqual({ content: "cute dog!", thought: "nice corgi", responseType: "reply" });
@@ -331,7 +331,7 @@ describe("runAgentLoop — post-result reply enforcement", () => {
     });
     expect(actions.reply?.content).toBe("42!");
     expect(usages.length).toBe(3);
-    expect(m.requests[2].toolChoice).toBe("required");
+    expect(m.requests[2].toolChoice).toEqual({ type: "function", function: { name: "reply" } });
   });
 
   it("still allows silence when prose arrives with no prior tool activity", async () => {

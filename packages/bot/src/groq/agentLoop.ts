@@ -9,12 +9,24 @@ import { stripImages } from "./buildMessages.js";
 
 export const MAX_STEPS = 4;
 
+/**
+ * Tool-decision calls run cool: temperament heat (0.7+) corrupts tool-call
+ * JSON on small models. Prose-only calls (split reply) keep temperament.
+ */
+export const TOOL_CALL_MAX_TEMPERATURE = 0.4;
+
+export type LoopToolChoice =
+  | "auto"
+  | "required"
+  | { type: "function"; function: { name: string } };
+
 export interface AgentLoopDeps {
   callModel: (
     model: string,
     messages: ChatCompletionMessageParam[],
     tools: ChatCompletionTool[],
-    toolChoice?: "auto" | "required",
+    toolChoice?: LoopToolChoice,
+    maxTemperature?: number,
   ) => Promise<RawCallResult>;
   executeCode?: (language: "python" | "javascript" | "bash", code: string) => Promise<CodeResult>;
   webSearch?: (query: string) => Promise<string>;
@@ -109,7 +121,7 @@ export async function runAgentLoop(
     const toolChoice = lastBatchProducedResults ? "required" : "auto";
     let r: RawCallResult;
     try {
-      r = await deps.callModel(opts.orchestratorModel, convo, tools, toolChoice);
+      r = await deps.callModel(opts.orchestratorModel, convo, tools, toolChoice, TOOL_CALL_MAX_TEMPERATURE);
     } catch (err) {
       const salvaged = extractFailedGeneration(err);
       if (salvaged && toolActivity.length > 0 && actions.reply === undefined) {
@@ -274,7 +286,7 @@ async function forceReply(
     codeExecutionEnabled: false,
     webSearchEnabled: false,
     splitMode: false, // always the full reply tool: we need content now
-  }).filter((t) => t.function.name === "reply" || t.function.name === "react");
+  }).filter((t) => t.function.name === "reply");
 
   const finalMessages: ChatCompletionMessageParam[] = [
     ...convo,
@@ -283,7 +295,11 @@ async function forceReply(
   const model = splitMode ? opts.replyModel : opts.orchestratorModel;
   let r: RawCallResult;
   try {
-    r = await deps.callModel(model, finalMessages, finalTools, "required");
+    r = await deps.callModel(
+      model, finalMessages, finalTools,
+      { type: "function", function: { name: "reply" } },
+      TOOL_CALL_MAX_TEMPERATURE,
+    );
   } catch (err) {
     const salvaged = extractFailedGeneration(err);
     if (salvaged) {
@@ -342,7 +358,11 @@ async function generateSplitReply(
     replyMessages.push({ role: "user", content: "Call reply with your response now." });
   }
 
-  const r = await deps.callModel(opts.replyModel, replyMessages, replyTools, "required");
+  const r = await deps.callModel(
+    opts.replyModel, replyMessages, replyTools,
+    { type: "function", function: { name: "reply" } },
+    // no temperature cap: this is the prose/personality call
+  );
   usages.push(r.usage);
 
   for (const rawCall of r.toolCalls) {

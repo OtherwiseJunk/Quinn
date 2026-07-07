@@ -34,7 +34,7 @@ function tool(name: string, description: string, properties: Record<string, unkn
 
 const REPLY = tool(
   "reply",
-  "Send a message to the channel. Call this ONLY when you have everything you need to respond. Do not call it in the same turn as run_code or web_search — wait for their results first.",
+  "Send a message to the channel. This is the ONLY way to say anything to users — plain text outside a tool call is discarded and never seen. Call it once you have everything you need to respond. Do not call it in the same turn as run_code or web_search — wait for their results first.",
   {
     content: { type: "string", description: "The message to send" },
     thought: { type: "string", description: "Your internal reasoning (may be shown to users — keep it professional)" },

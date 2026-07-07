@@ -16,15 +16,24 @@ export interface RawCallResult {
   usage: GroqUsage;
 }
 
+/** "auto" | "required" | force one specific function by name. */
+export type ToolChoice =
+  | "auto"
+  | "required"
+  | { type: "function"; function: { name: string } };
+
 const groq = new Groq({ apiKey: env.groqApiKey });
 
 export async function callGroqRaw(
   model: string,
   messages: ChatCompletionMessageParam[],
   tools: ChatCompletionTool[],
-  toolChoice: "auto" | "required" = "auto",
+  toolChoice: ToolChoice = "auto",
+  maxTemperature?: number,
 ): Promise<RawCallResult> {
-  const temperature = getTemperature();
+  const temperature = maxTemperature !== undefined
+    ? Math.min(getTemperature(), maxTemperature)
+    : getTemperature();
   const start = Date.now();
   const completion = await groq.chat.completions.create({
     model,
