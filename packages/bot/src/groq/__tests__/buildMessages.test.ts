@@ -220,16 +220,18 @@ describe("buildMessages", () => {
     expect((memoryMsg as any).content).toContain(`[#${mem.id}, saved 2024-01-15]`);
   });
 
-  it("maps bot messages to assistant role, others to user role with authorId: content", () => {
-    const history = [
-      fakeMessage("h1", "u1", "Hey Quinn", "Alice"),
-      fakeMessage("h2", BOT_ID, "Hey there!"),
-    ];
+  it("maps bot messages to assistant role, others to user role with timestamped name (id) labels", () => {
+    const NOW = 1_000_000_000_000;
+    const h1 = fakeMessage("h1", "u1", "Hey Quinn", "Alice");
+    h1.createdTimestamp = NOW - 30_000;
+    const h2 = fakeMessage("h2", BOT_ID, "Hey there!");
+    h2.createdTimestamp = NOW - 20_000;
     const trigger = fakeMessage("t1", "u1", "What's up?", "Alice");
-    const msgs = buildMessages(makeContext(), history, trigger, BOT_ID);
+    trigger.createdTimestamp = NOW;
+    const msgs = buildMessages(makeContext(), [h1, h2], trigger, BOT_ID, undefined, undefined, undefined, undefined, NOW);
 
     const userMsg = msgs.find(
-      (m) => m.role === "user" && (m as any).content === "u1: Hey Quinn"
+      (m) => m.role === "user" && (m as any).content === "[just now] Alice (u1): Hey Quinn"
     );
     expect(userMsg).toBeDefined();
 
@@ -258,23 +260,51 @@ describe("buildMessages", () => {
     expect(normalMsg).toBeDefined();
   });
 
-  it("appends trigger message if not already in history", () => {
+  it("always places the trigger last, labeled name (id), untimestamped", () => {
     const trigger = fakeMessage("t1", "u1", "Hello!", "Alice");
     const msgs = buildMessages(makeContext(), [], trigger, BOT_ID);
 
     const lastMsg = msgs[msgs.length - 1];
     expect(lastMsg.role).toBe("user");
-    expect((lastMsg as any).content).toBe("u1: Hello!");
+    expect((lastMsg as any).content).toBe("Alice (u1): Hello!");
   });
 
-  it("does not duplicate trigger if already in history", () => {
+  it("does not duplicate trigger if already in history, and inserts the context divider", () => {
+    const NOW = 1_000_000_000_000;
     const trigger = fakeMessage("t1", "u1", "Hello!", "Alice");
-    const history = [trigger];
-    const msgs = buildMessages(makeContext(), history, trigger, BOT_ID);
+    trigger.createdTimestamp = NOW;
+    const earlier = fakeMessage("m1", "u2", "old question?", "Bob");
+    earlier.createdTimestamp = NOW - 5 * 60_000;
+    const msgs = buildMessages(makeContext(), [earlier, trigger], trigger, BOT_ID, undefined, undefined, undefined, undefined, NOW);
 
-    const matchingMsgs = msgs.filter(
-      (m) => m.role === "user" && (m as any).content === "u1: Hello!"
+    const triggerMsgs = msgs.filter(
+      (m) => m.role === "user" && (m as any).content === "Alice (u1): Hello!"
     );
-    expect(matchingMsgs).toHaveLength(1);
+    expect(triggerMsgs).toHaveLength(1);
+    expect((msgs[msgs.length - 1] as any).content).toBe("Alice (u1): Hello!");
+
+    const historyMsg = msgs.find((m) => ((m as any).content as string)?.includes("old question?"));
+    expect((historyMsg as any).content).toBe("[5m ago] Bob (u2): old question?");
+
+    const divider = msgs[msgs.length - 2];
+    expect((divider as any).content).toContain("Respond ONLY to the following message");
+  });
+
+  it("omits the context divider when there is no history", () => {
+    const trigger = fakeMessage("t1", "u1", "Hello!", "Alice");
+    const msgs = buildMessages(makeContext(), [], trigger, BOT_ID);
+    const dividers = msgs.filter((m) =>
+      m.role !== "system" &&
+      typeof (m as any).content === "string" &&
+      ((m as any).content as string).includes("Respond ONLY")
+    );
+    expect(dividers).toHaveLength(0);
+  });
+
+  it("puts the current date/time at the top of the system message", () => {
+    const NOW = Date.UTC(2026, 6, 6, 12, 0, 0);
+    const trigger = fakeMessage("t1", "u1", "Hello!", "Alice");
+    const msgs = buildMessages(makeContext(), [], trigger, BOT_ID, undefined, undefined, undefined, undefined, NOW);
+    expect((msgs[0] as any).content).toStartWith("Current date and time: Mon, 06 Jul 2026 12:00:00 GMT");
   });
 });

@@ -41,11 +41,31 @@ function collectImageUrls(msg: Message): string[] {
   return urls;
 }
 
+/** "carol (333333333333333333)" — display name for conversation, snowflake for identity (names are user-controlled and spoofable). */
+function userLabel(msg: Message): string {
+  const displayName =
+    msg.member?.displayName ?? msg.author.displayName ?? msg.author.username;
+  return `${displayName} (${msg.author.id})`;
+}
+
+export function formatRelativeTime(thenMs: number, nowMs: number): string {
+  const deltaSec = Math.max(0, Math.floor((nowMs - thenMs) / 1000));
+  if (deltaSec < 60) return "just now";
+  const min = Math.floor(deltaSec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hours = Math.floor(min / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
 function buildUserContent(
-  displayName: string,
   msg: Message,
+  nowMs?: number,
 ): string | Array<ChatCompletionContentPart> {
-  const text = `${displayName}: ${msg.content}`;
+  const prefix = nowMs !== undefined
+    ? `[${formatRelativeTime(msg.createdTimestamp, nowMs)}] `
+    : "";
+  const text = `${prefix}${userLabel(msg)}: ${msg.content}`;
   const imageUrls = collectImageUrls(msg);
   if (imageUrls.length === 0) return text;
   return [
@@ -77,12 +97,13 @@ export function stripImages(messages: ChatCompletionMessageParam[]): ChatComplet
   });
 }
 
-function buildSystemMessage(context: GroqRequestContext): ChatCompletionMessageParam {
-  let content = context.systemPrompt;
+function buildSystemMessage(context: GroqRequestContext, nowMs: number): ChatCompletionMessageParam {
+  let content = `Current date and time: ${new Date(nowMs).toUTCString()}\n\n${context.systemPrompt}`;
   if (context.serverPrompt) {
     content += `\n\nAdditional instructions from the server admin:\n${context.serverPrompt}`;
   }
   content += `\n\nYou act by calling tools. Every action — replying, reacting, saving memories, running code — is a tool call. If you decide not to respond, simply call no reply tool. Never answer with plain text.`;
+  content += `\n\nMessages are labeled "displayName (userId)" with how long ago they were sent. Identify users by their userId — display names can be changed and spoofed. Earlier messages are context only: do not answer old questions from them. Respond ONLY to the final message.`;
   return { role: "system", content };
 }
 
@@ -138,25 +159,29 @@ function buildMemoryMessages(
   ];
 }
 
+const CONTEXT_DIVIDER =
+  "[The messages above are prior conversation context. Do not answer old questions from them. Respond ONLY to the following message.]";
+
 function buildHistoryMessages(
   history: Message[],
   botUserId: string,
+  triggerId: string,
   limit: number,
-): { messages: ChatCompletionMessageParam[]; recent: Message[] } {
+  nowMs: number,
+): ChatCompletionMessageParam[] {
   const filtered = history.filter(
     (m) =>
+      m.id !== triggerId &&
       !(m.author.id === botUserId && isThoughtMessage(m)) &&
       !m.content.startsWith("//")
   );
   const recent = filtered.slice(-limit);
 
-  const messages: ChatCompletionMessageParam[] = recent.map((msg) =>
+  return recent.map((msg) =>
     msg.author.id === botUserId
       ? { role: "assistant" as const, content: msg.content }
-      : { role: "user" as const, content: buildUserContent(msg.author.id, msg) }
+      : { role: "user" as const, content: buildUserContent(msg, nowMs) }
   );
-
-  return { messages, recent };
 }
 
 /**
@@ -171,21 +196,22 @@ export function buildMessages(
   userMemories?: BotMemory[],
   triggerUserId?: string,
   mentionedUserMemories?: Map<string, BotMemory[]>,
+  nowMs: number = Date.now(),
 ): ChatCompletionMessageParam[] {
-  const { messages: historyMessages, recent } = buildHistoryMessages(
-    history, botUserId, context.contextMessageLimit ?? 25,
+  const historyMessages = buildHistoryMessages(
+    history, botUserId, trigger.id, context.contextMessageLimit ?? 25, nowMs,
   );
 
-  const triggerMessage: ChatCompletionMessageParam[] =
-    recent.some((m) => m.id === trigger.id)
-      ? []
-      : [{ role: "user", content: buildUserContent(trigger.author.id, trigger) }];
+  const divider: ChatCompletionMessageParam[] = historyMessages.length > 0
+    ? [{ role: "user", content: CONTEXT_DIVIDER }]
+    : [];
 
   return [
-    buildSystemMessage(context),
+    buildSystemMessage(context, nowMs),
     ...buildContextMessages(context),
     ...buildMemoryMessages(selfMemories, userMemories, triggerUserId, mentionedUserMemories),
     ...historyMessages,
-    ...triggerMessage,
+    ...divider,
+    { role: "user", content: buildUserContent(trigger) },
   ];
 }
