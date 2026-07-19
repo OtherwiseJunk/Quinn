@@ -9,9 +9,9 @@ mock.module("@e2b/code-interpreter", () => ({
   Sandbox: { create: mock() },
 }));
 
-const { isThoughtMessage, buildMessages, buildSecondPassMessages } = await import("../buildMessages.js");
+const { isThoughtMessage, buildMessages, stripImages } = await import("../buildMessages.js");
 import type { GroqRequestContext, BotMemory } from "@quinn/shared";
-import type { CodeResult } from "../../e2b/sandbox.js";
+import type { ChatCompletionMessageParam } from "groq-sdk/resources/chat/completions";
 
 function fakeMessage(
   id: string,
@@ -54,6 +54,65 @@ function makeBotMemory(content: string, createdAt?: Date): BotMemory {
 
 const BOT_ID = "bot-1";
 
+describe("stripImages", () => {
+  it("replaces image parts with a placeholder and flattens to string", () => {
+    const messages: ChatCompletionMessageParam[] = [
+      { role: "system", content: "prompt" },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "alice: look at this" },
+          { type: "image_url", image_url: { url: "https://cdn.example/img.png" } },
+        ],
+      },
+    ];
+    const stripped = stripImages(messages);
+    expect(stripped[0]).toEqual({ role: "system", content: "prompt" });
+    expect(stripped[1].content).toBe("alice: look at this\n[user posted an image]");
+  });
+
+  it("leaves plain string messages untouched", () => {
+    const messages: ChatCompletionMessageParam[] = [
+      { role: "user", content: "bob: hello" },
+      { role: "assistant", content: "hi bob" },
+    ];
+    expect(stripImages(messages)).toEqual(messages);
+  });
+
+  it("uses one placeholder per image", () => {
+    const messages: ChatCompletionMessageParam[] = [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "carol: two pics" },
+          { type: "image_url", image_url: { url: "https://a/1.png" } },
+          { type: "image_url", image_url: { url: "https://a/2.png" } },
+        ],
+      },
+    ];
+    const stripped = stripImages(messages);
+    expect(stripped[0].content).toBe("carol: two pics\n[user posted an image]\n[user posted an image]");
+  });
+});
+
+describe("slim system message", () => {
+  it("no longer embeds the JSON schema", () => {
+    const context = {
+      systemPrompt: "You are Quinn.",
+      serverPrompt: null,
+      userContext: null,
+      adminUserContext: null,
+      contextMessageLimit: 25,
+    };
+    const messages = buildMessages(context, [], fakeMessage("hello", "u1", "hello"), BOT_ID);
+    const system = messages[0];
+    expect(typeof system.content).toBe("string");
+    expect(system.content as string).not.toContain("should_respond");
+    expect(system.content as string).not.toContain("run_code");
+    expect(system.content as string).toContain("You act by calling tools");
+  });
+});
+
 describe("isThoughtMessage", () => {
   it("returns true for triple-backtick wrapped content", () => {
     const msg = fakeMessage("1", BOT_ID, "```this is a thought```");
@@ -86,16 +145,17 @@ describe("buildMessages", () => {
     expect((msgs[0] as any).content).toContain("Be extra nice");
   });
 
-  it("appends JSON schema reminder when system prompt lacks 'json'", () => {
+  it("appends tool-calling guidance to system prompt", () => {
     const trigger = fakeMessage("t1", "u1", "Hello");
     const msgs = buildMessages(makeContext(), [], trigger, BOT_ID);
-    expect((msgs[0] as any).content).toContain("valid JSON");
+    expect((msgs[0] as any).content).toContain("You act by calling tools");
+    expect((msgs[0] as any).content).toContain("Never answer with plain text");
   });
 
-  it("skips JSON reminder when prompt contains 'json'", () => {
-    const ctx = makeContext({ systemPrompt: "Return json always." });
+  it("does not include JSON schema in slimmed system message", () => {
     const trigger = fakeMessage("t1", "u1", "Hello");
-    const msgs = buildMessages(ctx, [], trigger, BOT_ID);
+    const msgs = buildMessages(makeContext(), [], trigger, BOT_ID);
+    expect((msgs[0] as any).content).not.toContain("should_respond");
     expect((msgs[0] as any).content).not.toContain("valid JSON");
   });
 
@@ -160,16 +220,18 @@ describe("buildMessages", () => {
     expect((memoryMsg as any).content).toContain(`[#${mem.id}, saved 2024-01-15]`);
   });
 
-  it("maps bot messages to assistant role, others to user role with authorId: content", () => {
-    const history = [
-      fakeMessage("h1", "u1", "Hey Quinn", "Alice"),
-      fakeMessage("h2", BOT_ID, "Hey there!"),
-    ];
+  it("maps bot messages to assistant role, others to user role with timestamped name (id) labels", () => {
+    const NOW = 1_000_000_000_000;
+    const h1 = fakeMessage("h1", "u1", "Hey Quinn", "Alice");
+    h1.createdTimestamp = NOW - 30_000;
+    const h2 = fakeMessage("h2", BOT_ID, "Hey there!");
+    h2.createdTimestamp = NOW - 20_000;
     const trigger = fakeMessage("t1", "u1", "What's up?", "Alice");
-    const msgs = buildMessages(makeContext(), history, trigger, BOT_ID);
+    trigger.createdTimestamp = NOW;
+    const msgs = buildMessages(makeContext(), [h1, h2], trigger, BOT_ID, undefined, undefined, undefined, undefined, NOW);
 
     const userMsg = msgs.find(
-      (m) => m.role === "user" && (m as any).content === "u1: Hey Quinn"
+      (m) => m.role === "user" && (m as any).content === "[just now] Alice (u1): Hey Quinn"
     );
     expect(userMsg).toBeDefined();
 
@@ -198,83 +260,51 @@ describe("buildMessages", () => {
     expect(normalMsg).toBeDefined();
   });
 
-  it("appends trigger message if not already in history", () => {
+  it("always places the trigger last, labeled name (id), untimestamped", () => {
     const trigger = fakeMessage("t1", "u1", "Hello!", "Alice");
     const msgs = buildMessages(makeContext(), [], trigger, BOT_ID);
 
     const lastMsg = msgs[msgs.length - 1];
     expect(lastMsg.role).toBe("user");
-    expect((lastMsg as any).content).toBe("u1: Hello!");
+    expect((lastMsg as any).content).toBe("Alice (u1): Hello!");
   });
 
-  it("does not duplicate trigger if already in history", () => {
+  it("does not duplicate trigger if already in history, and inserts the context divider", () => {
+    const NOW = 1_000_000_000_000;
     const trigger = fakeMessage("t1", "u1", "Hello!", "Alice");
-    const history = [trigger];
-    const msgs = buildMessages(makeContext(), history, trigger, BOT_ID);
+    trigger.createdTimestamp = NOW;
+    const earlier = fakeMessage("m1", "u2", "old question?", "Bob");
+    earlier.createdTimestamp = NOW - 5 * 60_000;
+    const msgs = buildMessages(makeContext(), [earlier, trigger], trigger, BOT_ID, undefined, undefined, undefined, undefined, NOW);
 
-    const matchingMsgs = msgs.filter(
-      (m) => m.role === "user" && (m as any).content === "u1: Hello!"
+    const triggerMsgs = msgs.filter(
+      (m) => m.role === "user" && (m as any).content === "Alice (u1): Hello!"
     );
-    expect(matchingMsgs).toHaveLength(1);
-  });
-});
+    expect(triggerMsgs).toHaveLength(1);
+    expect((msgs[msgs.length - 1] as any).content).toBe("Alice (u1): Hello!");
 
-describe("buildSecondPassMessages", () => {
-  const baseMessages = [
-    { role: "system" as const, content: "You are Quinn." },
-    { role: "user" as const, content: "Alice: What is 2^100?" },
-  ];
+    const historyMsg = msgs.find((m) => ((m as any).content as string)?.includes("old question?"));
+    expect((historyMsg as any).content).toBe("[5m ago] Bob (u2): old question?");
 
-  const runCode = { language: "python" as const, code: "print(2**100)" };
-
-  it("starts with all original messages", () => {
-    const result: CodeResult = { success: true, stdout: "1267650600228229401496703205376", stderr: "", durationMs: 100 };
-    const msgs = buildSecondPassMessages(baseMessages, runCode, result);
-
-    expect(msgs[0]).toEqual(baseMessages[0]);
-    expect(msgs[1]).toEqual(baseMessages[1]);
+    const divider = msgs[msgs.length - 2];
+    expect((divider as any).content).toContain("Respond ONLY to the following message");
   });
 
-  it("adds assistant message with code intent", () => {
-    const result: CodeResult = { success: true, stdout: "42", stderr: "", durationMs: 100 };
-    const msgs = buildSecondPassMessages(baseMessages, runCode, result);
-
-    const assistantMsg = msgs[2];
-    expect(assistantMsg.role).toBe("assistant");
-    expect((assistantMsg as any).content).toContain("python");
-    expect((assistantMsg as any).content).toContain("print(2**100)");
+  it("omits the context divider when there is no history", () => {
+    const trigger = fakeMessage("t1", "u1", "Hello!", "Alice");
+    const msgs = buildMessages(makeContext(), [], trigger, BOT_ID);
+    const dividers = msgs.filter((m) =>
+      m.role !== "system" &&
+      typeof (m as any).content === "string" &&
+      ((m as any).content as string).includes("Respond ONLY")
+    );
+    expect(dividers).toHaveLength(0);
   });
 
-  it("adds user message with execution result and no-recurse instruction", () => {
-    const result: CodeResult = { success: true, stdout: "42", stderr: "", durationMs: 100 };
-    const msgs = buildSecondPassMessages(baseMessages, runCode, result);
-
-    const lastMsg = msgs[msgs.length - 1];
-    expect(lastMsg.role).toBe("user");
-    expect((lastMsg as any).content).toContain("Execution succeeded.");
-    expect((lastMsg as any).content).toContain("Do NOT include \"run_code\"");
-  });
-
-  it("includes error info for failed execution", () => {
-    const result: CodeResult = {
-      success: false,
-      stdout: "",
-      stderr: "Traceback...",
-      error: "NameError: x is not defined",
-      durationMs: 200,
-    };
-    const msgs = buildSecondPassMessages(baseMessages, runCode, result);
-
-    const lastMsg = msgs[msgs.length - 1];
-    expect((lastMsg as any).content).toContain("Execution failed.");
-    expect((lastMsg as any).content).toContain("NameError");
-  });
-
-  it("does not mutate original messages array", () => {
-    const original = [...baseMessages];
-    const result: CodeResult = { success: true, stdout: "ok", stderr: "", durationMs: 100 };
-    buildSecondPassMessages(baseMessages, runCode, result);
-
-    expect(baseMessages).toEqual(original);
+  it("puts the current date/time at the top of the system message", () => {
+    const NOW = Date.UTC(2026, 6, 6, 12, 0, 0);
+    const trigger = fakeMessage("t1", "u1", "Hello!", "Alice");
+    const msgs = buildMessages(makeContext(), [], trigger, BOT_ID, undefined, undefined, undefined, undefined, NOW);
+    expect((msgs[0] as any).content).toStartWith("Current date and time: Mon, 06 Jul 2026 12:00:00 GMT");
   });
 });

@@ -11,9 +11,12 @@ import {
   disciplineUser,
   reportUsage,
 } from "../api/serverClient.js";
-import { buildMessages, buildSecondPassMessages, isThoughtMessage } from "../groq/buildMessages.js";
-import { callGroq } from "../groq/groqClient.js";
+import { buildMessages, isThoughtMessage } from "../groq/buildMessages.js";
+import { runAgentLoop } from "../groq/agentLoop.js";
+import type { AgentLoopResult } from "../groq/agentLoop.js";
+import { callGroqRaw } from "../groq/groqClient.js";
 import type { GroqUsage } from "../groq/groqClient.js";
+import { webSearch, isWebSearchEnabled } from "../groq/webSearch.js";
 import { isCodeExecutionEnabled, executeCode } from "../e2b/sandbox.js";
 import { recordMessage } from "../groq/temperament.js";
 import { containsForbiddenWord } from "./forbiddenWords.js";
@@ -27,8 +30,8 @@ import {
 import { sendReply, sendChannel } from "./chunkedSend.js";
 import { lock, unlock } from "../lock/channelLock.js";
 import { sampleRandom } from "@quinn/shared";
-import type { QuinnResponse, GroqRequestContext, BotMemory, ResolvedChannelConfig } from "@quinn/shared";
-import type { ChatCompletionMessageParam } from "groq-sdk/resources/chat/completions";
+import type { GroqRequestContext, BotMemory, ResolvedChannelConfig, ResolvedActions } from "@quinn/shared";
+import { env } from "../env.js";
 import { resolveUserPronounSet, replacePronouns, PronounSet } from "./pronounResolver.js";
 
 const MAX_MEMORIES = 15;
@@ -121,71 +124,6 @@ async function fetchHistory(
   return history;
 }
 
-/** Run E2B code execution and return a second-pass Groq response. */
-async function handleCodeExecution(
-  response: QuinnResponse,
-  groqMessages: ChatCompletionMessageParam[],
-  message: Message,
-  label: string,
-): Promise<{ response: QuinnResponse; usage?: GroqUsage; e2bDurationMs?: number; e2bSuccess?: boolean }> {
-  if (!response.run_code) return { response };
-
-  const e2bEnabled = isCodeExecutionEnabled();
-  console.log(
-    `[Quinn] ${label}: run_code requested (${response.run_code.language}, ${response.run_code.code.length} chars), e2b=${e2bEnabled ? "enabled" : "DISABLED"}`
-  );
-
-  if (!e2bEnabled) {
-    response.run_code = undefined;
-    return { response };
-  }
-
-  const { language, code } = response.run_code;
-  console.log(`[Quinn] ${label}: executing ${language} code via E2B:\n${code}`);
-
-  const codeResult = await executeCode(language, code);
-  console.log(`[Quinn] ${label}: E2B result:`, {
-    success: codeResult.success,
-    stdout: codeResult.stdout || "(empty)",
-    stderr: codeResult.stderr || "(empty)",
-    error: codeResult.error ?? null,
-    durationMs: codeResult.durationMs,
-  });
-
-  const codeThought = [
-    `[ran ${language} code]`,
-    code,
-    `[result: ${codeResult.success ? "success" : "error"}]`,
-    codeResult.stdout || undefined,
-    codeResult.error ? `Error: ${codeResult.error}` : undefined,
-  ].filter(Boolean).join("\n");
-
-  const secondPassMessages = buildSecondPassMessages(groqMessages, response.run_code, codeResult);
-  console.log(`[Quinn] ${label}: calling Groq second pass (${secondPassMessages.length} messages)`);
-
-  const stopTyping = startTyping(message.channel);
-  let secondResponse: QuinnResponse;
-  let usage: GroqUsage;
-  try {
-    const secondCall = await callGroq(secondPassMessages);
-    secondResponse = secondCall.response;
-    usage = secondCall.usage;
-  } finally {
-    stopTyping();
-  }
-
-  secondResponse.thought_process = codeThought + "\n\n" + secondResponse.thought_process;
-  secondResponse.run_code = undefined;
-  console.log(`[Quinn] ${label}: second pass complete, will send response`);
-
-  return {
-    response: secondResponse,
-    usage,
-    e2bDurationMs: codeResult.durationMs,
-    e2bSuccess: codeResult.success,
-  };
-}
-
 /** Fire-and-forget API usage reporting. */
 function reportApiUsage(
   groqUsages: GroqUsage[],
@@ -195,10 +133,11 @@ function reportApiUsage(
   label: string,
   e2bDurationMs?: number,
   e2bSuccess?: boolean,
+  searchCount?: number,
 ): void {
   const totalPromptTokens = groqUsages.reduce((sum, u) => sum + u.promptTokens, 0);
   const totalCompletionTokens = groqUsages.reduce((sum, u) => sum + u.completionTokens, 0);
-  const cost = estimateCost(groqUsages, e2bDurationMs);
+  const cost = estimateCost(groqUsages, e2bDurationMs, searchCount);
   reportUsage({
     guildId,
     channelId,
@@ -214,64 +153,67 @@ function reportApiUsage(
 
 /** Persist new memories, deletions, and updates from Quinn's response. */
 function persistMemories(
-  response: QuinnResponse,
+  actions: ResolvedActions,
   guildId: string,
   userId: string,
   label: string,
 ): void {
-  if (response.new_memories && response.new_memories.length > 0) {
+  if (actions.rememberUser.length > 0) {
     console.log(
-      `[Quinn] ${label}: saving ${response.new_memories.length} user memories: ${response.new_memories.join("; ")}`
+      `[Quinn] ${label}: saving ${actions.rememberUser.length} user memories: ${actions.rememberUser.join("; ")}`
     );
-    saveMemories(guildId, userId, response.new_memories).catch(
+    saveMemories(guildId, userId, actions.rememberUser).catch(
       (err) => console.error(`[Quinn] ${label}: failed to save user memories:`, err)
     );
   }
-  if (response.new_self_memories && response.new_self_memories.length > 0) {
+  if (actions.rememberSelf.length > 0) {
     console.log(
-      `[Quinn] ${label}: saving ${response.new_self_memories.length} self memories: ${response.new_self_memories.join("; ")}`
+      `[Quinn] ${label}: saving ${actions.rememberSelf.length} self memories: ${actions.rememberSelf.join("; ")}`
     );
-    saveMemories(guildId, null, response.new_self_memories).catch(
+    saveMemories(guildId, null, actions.rememberSelf).catch(
       (err) => console.error(`[Quinn] ${label}: failed to save self memories:`, err)
     );
   }
-  if (response.delete_memories && response.delete_memories.length > 0) {
+  if (actions.forget.length > 0) {
     console.log(
-      `[Quinn] ${label}: deleting ${response.delete_memories.length} memories: [${response.delete_memories.join(", ")}]`
+      `[Quinn] ${label}: deleting ${actions.forget.length} memories: [${actions.forget.join(", ")}]`
     );
-    deleteMemoriesById(guildId, response.delete_memories).catch(
+    deleteMemoriesById(guildId, actions.forget).catch(
       (err) => console.error(`[Quinn] ${label}: failed to delete memories:`, err)
     );
   }
-  if (response.update_memories && response.update_memories.length > 0) {
+  if (actions.updateMemories.length > 0) {
     console.log(
-      `[Quinn] ${label}: updating ${response.update_memories.length} memories: [${response.update_memories.map((u) => `#${u.id}`).join(", ")}]`
+      `[Quinn] ${label}: updating ${actions.updateMemories.length} memories: [${actions.updateMemories.map((u) => `#${u.id}`).join(", ")}]`
     );
-    updateMemoriesById(guildId, response.update_memories).catch(
+    updateMemoriesById(guildId, actions.updateMemories).catch(
       (err) => console.error(`[Quinn] ${label}: failed to update memories:`, err)
     );
   }
 }
 
-/** Apply discipline if Quinn requested it, mutating the response content. */
+/** Apply discipline if Quinn requested it, mutating the reply content. */
 async function handleDiscipline(
-  response: QuinnResponse,
+  actions: ResolvedActions,
   guildId: string,
   userId: string,
   label: string,
 ): Promise<void> {
-  if (!response.timeout_user) return;
+  if (!actions.timeout) return;
+  if (!actions.reply) {
+    console.error(`[Quinn] ${label}: timeout requested but no reply present — loop contract violated`);
+    return;
+  }
   try {
     console.log(`[Quinn] ${label}: requesting discipline`);
     const { level, durationHours } = await disciplineUser(guildId, userId);
     if (level === 0) {
-      response.content = (response.content || "").trimEnd() +
+      actions.reply.content = (actions.reply.content || "").trimEnd() +
         "\n\n⚠️ *Consider this a warning.*";
     } else {
-      response.content = (response.content || "").trimEnd() +
+      actions.reply.content = (actions.reply.content || "").trimEnd() +
         `\n\n⏱️ *You have been timed out for ${durationHours} hour(s).*`;
     }
-    response.should_respond = true;
   } catch (err) {
     console.error(`[Quinn] ${label}: failed to discipline user:`, err);
   }
@@ -279,27 +221,27 @@ async function handleDiscipline(
 
 /** Send Quinn's response: typing delay, optional thoughts, then the message. */
 async function sendResponse(
-  response: QuinnResponse,
+  actions: ResolvedActions,
   config: ResolvedChannelConfig,
   message: Message,
   channel: TextChannel,
   label: string,
 ): Promise<void> {
-  if (!response.should_respond) {
-    const action = response.should_react ? "react-only" : "silent";
-    console.log(`[Quinn] ${label}: decided not to respond (${action})`);
+  if (!actions.reply) {
+    console.log(`[Quinn] ${label}: decided not to respond (silent)`);
     return;
   }
+  const reply = actions.reply;
 
   if (
     config.forbiddenWords.length > 0 &&
-    containsForbiddenWord(response.content, config.forbiddenWords)
+    containsForbiddenWord(reply.content, config.forbiddenWords)
   ) {
     console.warn(`[Quinn] ${label}: discarded response (forbidden word in output)`);
     return;
   }
 
-  const typingDelay = calculateTypingDelay(response.content.length);
+  const typingDelay = calculateTypingDelay(reply.content.length);
   const stopTyping = startTyping(message.channel);
   try {
     await delay(typingDelay);
@@ -307,17 +249,17 @@ async function sendResponse(
     stopTyping();
   }
 
-  if (config.displayThoughts && response.thought_process) {
-    await sendChannel(channel, "```\n" + response.thought_process + "\n```");
+  if (config.displayThoughts && reply.thought) {
+    await sendChannel(channel, "```\n" + reply.thought + "\n```");
   }
 
   console.log(
-    `[Quinn] ${label}: responding (${response.response_type}, ${response.content.length} chars)`
+    `[Quinn] ${label}: responding (${reply.responseType}, ${reply.content.length} chars)`
   );
-  if (response.response_type === "reply") {
-    await sendReply(message, response.content);
+  if (reply.responseType === "reply") {
+    await sendReply(message, reply.content);
   } else {
-    await sendChannel(channel, response.content);
+    await sendChannel(channel, reply.content);
   }
   recordMessage();
 }
@@ -385,42 +327,54 @@ export async function processMessage(
       mentionedUserMemories
     );
 
-    const groqUsages: GroqUsage[] = [];
+    // Web-search side calls carry their own usage; collect them outside the loop.
+    let searchCount = 0;
+    const sideUsages: GroqUsage[] = [];
+    const webSearchDep = isWebSearchEnabled()
+      ? async (q: string) => {
+          const r = await webSearch(q);
+          searchCount++;
+          sideUsages.push(r.usage);
+          return r.text;
+        }
+      : undefined;
+
     const stopTyping = startTyping(message.channel);
-    let response: QuinnResponse;
+    let loopResult: AgentLoopResult;
     try {
-      const firstCall = await callGroq(groqMessages);
-      response = firstCall.response;
-      groqUsages.push(firstCall.usage);
+      loopResult = await runAgentLoop(
+        groqMessages,
+        { orchestratorModel: env.groqOrchestratorModel, replyModel: env.groqReplyModel },
+        {
+          callModel: callGroqRaw,
+          executeCode: isCodeExecutionEnabled() ? executeCode : undefined,
+          webSearch: webSearchDep,
+          onStatus: (text) => { sendChannel(channel, text).catch(() => {}); },
+        },
+      );
     } finally {
       stopTyping();
     }
+    const { actions } = loopResult;
+    const groqUsages: GroqUsage[] = [...loopResult.usages, ...sideUsages];
 
-    // Code execution (two-pass)
-    const codeExec = await handleCodeExecution(response, groqMessages, message, label);
-    response = codeExec.response;
-    if (codeExec.usage) groqUsages.push(codeExec.usage);
-
-    // Side effects
+    // Pronouns: thought lives on the reply now
     const pronounSet = resolveUserPronounSet(context.userContext, message.member ?? null);
-    if (pronounSet !== null && pronounSet !== PronounSet.They && response.thought_process) {
-      response.thought_process = replacePronouns(
-        response.thought_process,
-        pronounSet,
-        PronounSet.They,
-      );
+    if (actions.reply && pronounSet !== null && pronounSet !== PronounSet.They) {
+      actions.reply.thought = replacePronouns(actions.reply.thought, pronounSet, PronounSet.They);
     }
 
-    reportApiUsage(groqUsages, guildId, channelId, message.author.id, label, codeExec.e2bDurationMs, codeExec.e2bSuccess);
+    reportApiUsage(groqUsages, guildId, channelId, message.author.id, label,
+      loopResult.e2bDurationMs, loopResult.e2bSuccess, searchCount);
 
-    if (response.should_react && response.reaction_emoji) {
-      console.log(`[Quinn] ${label}: reacting with ${response.reaction_emoji}`);
-      await message.react(response.reaction_emoji).catch(() => {});
+    if (actions.react) {
+      console.log(`[Quinn] ${label}: reacting with ${actions.react.emoji}`);
+      await message.react(actions.react.emoji).catch(() => {});
     }
 
-    persistMemories(response, guildId, message.author.id, label);
-    await handleDiscipline(response, guildId, message.author.id, label);
-    await sendResponse(response, config, message, channel, label);
+    persistMemories(actions, guildId, message.author.id, label);
+    await handleDiscipline(actions, guildId, message.author.id, label);
+    await sendResponse(actions, config, message, channel, label);
   } catch (err) {
     console.error(`[Quinn] ${label}: error processing message:`, err);
   } finally {

@@ -1,8 +1,6 @@
 import type { Message } from "discord.js";
-import type { GroqRequestContext, BotMemory, QuinnResponse } from "@quinn/shared";
+import type { GroqRequestContext, BotMemory } from "@quinn/shared";
 import type { ChatCompletionMessageParam, ChatCompletionContentPart } from "groq-sdk/resources/chat/completions";
-import type { CodeResult } from "../e2b/sandbox.js";
-import { formatCodeResult } from "../e2b/sandbox.js";
 
 function formatDate(date: Date | string): string {
   return new Date(date).toISOString().slice(0, 10);
@@ -43,11 +41,31 @@ function collectImageUrls(msg: Message): string[] {
   return urls;
 }
 
+/** "carol (333333333333333333)" — display name for conversation, snowflake for identity (names are user-controlled and spoofable). */
+function userLabel(msg: Message): string {
+  const displayName =
+    msg.member?.displayName ?? msg.author.displayName ?? msg.author.username;
+  return `${displayName} (${msg.author.id})`;
+}
+
+export function formatRelativeTime(thenMs: number, nowMs: number): string {
+  const deltaSec = Math.max(0, Math.floor((nowMs - thenMs) / 1000));
+  if (deltaSec < 60) return "just now";
+  const min = Math.floor(deltaSec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hours = Math.floor(min / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
 function buildUserContent(
-  displayName: string,
   msg: Message,
+  nowMs?: number,
 ): string | Array<ChatCompletionContentPart> {
-  const text = `${displayName}: ${msg.content}`;
+  const prefix = nowMs !== undefined
+    ? `[${formatRelativeTime(msg.createdTimestamp, nowMs)}] `
+    : "";
+  const text = `${prefix}${userLabel(msg)}: ${msg.content}`;
   const imageUrls = collectImageUrls(msg);
   if (imageUrls.length === 0) return text;
   return [
@@ -64,33 +82,28 @@ export function isThoughtMessage(message: Message): boolean {
   return content.startsWith("```") && content.endsWith("```");
 }
 
-function buildSystemMessage(context: GroqRequestContext): ChatCompletionMessageParam {
-  let content = context.systemPrompt;
+/**
+ * Text-only view for non-vision orchestrator models: image parts become
+ * placeholders, array content flattens to a plain string.
+ */
+export function stripImages(messages: ChatCompletionMessageParam[]): ChatCompletionMessageParam[] {
+  return messages.map((m) => {
+    if (!Array.isArray(m.content)) return m;
+    const parts = m.content as Array<{ type: string; text?: string }>;
+    const rendered = parts.map((p) =>
+      p.type === "text" ? (p.text ?? "") : "[user posted an image]"
+    );
+    return { ...m, content: rendered.join("\n") } as ChatCompletionMessageParam;
+  });
+}
+
+function buildSystemMessage(context: GroqRequestContext, nowMs: number): ChatCompletionMessageParam {
+  let content = `Current date and time: ${new Date(nowMs).toUTCString()}\n\n${context.systemPrompt}`;
   if (context.serverPrompt) {
     content += `\n\nAdditional instructions from the server admin:\n${context.serverPrompt}`;
   }
-
-  // Groq requires the word "json" in messages when using response_format: json_object.
-  if (!content.toLowerCase().includes("json")) {
-    content += `\n\nYou MUST respond with valid JSON matching this schema:
-{
-  "thought_process": "your internal reasoning (may be shown to users — keep it professional and appropriate)",
-  "should_respond": true/false,
-  "response_type": "reply" or "standalone",
-  "content": "your message content",
-  "should_react": true/false,
-  "reaction_emoji": "emoji to react with (only used if should_react is true)",
-  "new_memories": ["observations about the user (optional)"],
-  "new_self_memories": ["your own opinions/preferences to remember (optional)"],
-  "delete_memories": [id, ...] (optional — remove outdated/wrong memories by ID),
-  "update_memories": [{"id": 42, "content": "corrected text"}] (optional — fix a memory),
-  "timeout_user": true (optional — request discipline for this user),
-  "run_code": {"language": "python"|"javascript"|"bash", "code": "..."} (optional — execute code in a sandbox)
-}`;
-  }
-
-  content += `\n\nIMPORTANT: Only use "run_code" when genuine computation, data processing, or complex logic is required — things you truly cannot do in your head. Never use it for simple arithmetic, string formatting, printing hardcoded values, or restating information you already know. Code execution is expensive; if you can answer without it, do so.`;
-
+  content += `\n\nYou act by calling tools. Every action — replying, reacting, saving memories, running code — is a tool call. If you decide not to respond, simply call no reply tool. Never answer with plain text.`;
+  content += `\n\nMessages are labeled "displayName (userId)" with how long ago they were sent. Identify users by their userId — display names can be changed and spoofed. Earlier messages are context only: do not answer old questions from them. Respond ONLY to the final message.`;
   return { role: "system", content };
 }
 
@@ -146,25 +159,29 @@ function buildMemoryMessages(
   ];
 }
 
+const CONTEXT_DIVIDER =
+  "[The messages above are prior conversation context. Do not answer old questions from them. Respond ONLY to the following message.]";
+
 function buildHistoryMessages(
   history: Message[],
   botUserId: string,
+  triggerId: string,
   limit: number,
-): { messages: ChatCompletionMessageParam[]; recent: Message[] } {
+  nowMs: number,
+): ChatCompletionMessageParam[] {
   const filtered = history.filter(
     (m) =>
+      m.id !== triggerId &&
       !(m.author.id === botUserId && isThoughtMessage(m)) &&
       !m.content.startsWith("//")
   );
   const recent = filtered.slice(-limit);
 
-  const messages: ChatCompletionMessageParam[] = recent.map((msg) =>
+  return recent.map((msg) =>
     msg.author.id === botUserId
       ? { role: "assistant" as const, content: msg.content }
-      : { role: "user" as const, content: buildUserContent(msg.author.id, msg) }
+      : { role: "user" as const, content: buildUserContent(msg, nowMs) }
   );
-
-  return { messages, recent };
 }
 
 /**
@@ -179,46 +196,22 @@ export function buildMessages(
   userMemories?: BotMemory[],
   triggerUserId?: string,
   mentionedUserMemories?: Map<string, BotMemory[]>,
+  nowMs: number = Date.now(),
 ): ChatCompletionMessageParam[] {
-  const { messages: historyMessages, recent } = buildHistoryMessages(
-    history, botUserId, context.contextMessageLimit ?? 25,
+  const historyMessages = buildHistoryMessages(
+    history, botUserId, trigger.id, context.contextMessageLimit ?? 25, nowMs,
   );
 
-  const triggerMessage: ChatCompletionMessageParam[] =
-    recent.some((m) => m.id === trigger.id)
-      ? []
-      : [{ role: "user", content: buildUserContent(trigger.author.id, trigger) }];
+  const divider: ChatCompletionMessageParam[] = historyMessages.length > 0
+    ? [{ role: "user", content: CONTEXT_DIVIDER }]
+    : [];
 
   return [
-    buildSystemMessage(context),
+    buildSystemMessage(context, nowMs),
     ...buildContextMessages(context),
     ...buildMemoryMessages(selfMemories, userMemories, triggerUserId, mentionedUserMemories),
     ...historyMessages,
-    ...triggerMessage,
+    ...divider,
+    { role: "user", content: buildUserContent(trigger) },
   ];
-}
-
-/**
- * Builds a second-pass messages array that includes the original conversation,
- * Quinn's code execution request, and the execution result.
- */
-export function buildSecondPassMessages(
-  originalMessages: ChatCompletionMessageParam[],
-  runCode: NonNullable<QuinnResponse["run_code"]>,
-  codeResult: CodeResult
-): ChatCompletionMessageParam[] {
-  const messages: ChatCompletionMessageParam[] = [...originalMessages];
-
-  messages.push({
-    role: "assistant",
-    content: `I want to run some ${runCode.language} code to help answer this:\n\`\`\`${runCode.language}\n${runCode.code}\n\`\`\``,
-  });
-
-  const formatted = formatCodeResult(runCode.language, runCode.code, codeResult);
-  messages.push({
-    role: "user",
-    content: `${formatted}\n\nInterpret the result above and respond to the user. Do NOT include "run_code" in your response.`,
-  });
-
-  return messages;
 }
