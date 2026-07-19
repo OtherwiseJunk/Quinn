@@ -34,7 +34,7 @@ function validateRunCode(
 
 const groq = new Groq({ apiKey: env.groqApiKey });
 
-const MODEL = "meta-llama/llama-4-scout-17b-16e-instruct";
+const MODEL = "Openai/gpt-oss-120b";
 
 export async function callGroq(
   messages: ChatCompletionMessageParam[]
