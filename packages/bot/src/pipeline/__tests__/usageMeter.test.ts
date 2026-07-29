@@ -57,8 +57,8 @@ describe("estimateCost", () => {
     expect(oss).toBeGreaterThan(scout); // $0.15 vs $0.11 input
   });
 
-  it("prices unknown models at the scout rate", () => {
-    const known = estimateCost([{ model: "meta-llama/llama-4-scout-17b-16e-instruct", promptTokens: 500, completionTokens: 100 }]);
+  it("prices unknown models at the default model's rate", () => {
+    const known = estimateCost([{ model: "openai/gpt-oss-120b", promptTokens: 500, completionTokens: 100 }]);
     const unknown = estimateCost([{ model: "who/knows", promptTokens: 500, completionTokens: 100 }]);
     expect(unknown).toBe(known);
   });

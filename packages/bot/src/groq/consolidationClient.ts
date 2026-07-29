@@ -14,14 +14,12 @@ export interface ConsolidationResult {
 
 const groq = new Groq({ apiKey: env.groqApiKey });
 
-const MODEL = "meta-llama/llama-4-scout-17b-16e-instruct";
-
 export async function callConsolidation(
   messages: ChatCompletionMessageParam[],
 ): Promise<ConsolidationResult> {
   const start = Date.now();
   const completion = await groq.chat.completions.create({
-    model: MODEL,
+    model: env.groqConsolidationModel,
     messages,
     response_format: { type: "json_object" },
     temperature: 0.3,

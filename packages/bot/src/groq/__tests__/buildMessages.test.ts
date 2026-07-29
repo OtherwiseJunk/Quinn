@@ -1,8 +1,7 @@
 import { describe, it, expect, mock } from "bun:test";
 
-mock.module("../../env.js", () => ({
-  env: { e2bApiKey: undefined },
-}));
+const fakeEnv = { e2bApiKey: undefined, imageInputEnabled: false };
+mock.module("../../env.js", () => ({ env: fakeEnv }));
 
 // Stub E2B SDK so sandbox.ts doesn't fail to import
 mock.module("@e2b/code-interpreter", () => ({
@@ -92,6 +91,84 @@ describe("stripImages", () => {
     ];
     const stripped = stripImages(messages);
     expect(stripped[0].content).toBe("carol: two pics\n[user posted an image]\n[user posted an image]");
+  });
+});
+
+function fakeImageMessage(
+  attachments: Array<Record<string, unknown>>,
+  content = "look at this",
+) {
+  const msg = fakeMessage("m-img", "user-1", content, "alice");
+  msg.attachments = new Map(attachments.map((a, i) => [String(i), a]));
+  return msg;
+}
+
+/** Renders the trigger message the way buildMessages hands it to Groq. */
+function triggerContent(msg: any) {
+  const messages = buildMessages(makeContext(), [], msg, BOT_ID);
+  return messages[messages.length - 1].content;
+}
+
+describe("image input disabled (default)", () => {
+  it("sends a text-only string describing the image", () => {
+    const content = triggerContent(
+      fakeImageMessage([
+        { url: "https://cdn.example/dog.png", name: "dog.png", contentType: "image/png", width: 1920, height: 1080, size: 250_880, description: null },
+      ]),
+    );
+    expect(typeof content).toBe("string");
+    expect(content).toBe(
+      "alice (user-1): look at this\n[user posted an image — dog.png, image/png, 1920x1080, 245 KB]",
+    );
+  });
+
+  it("keeps an image-only post from arriving as a blank line", () => {
+    const content = triggerContent(
+      fakeImageMessage([{ url: "https://cdn.example/a.png", name: "a.png", contentType: "image/png", width: 10, height: 10, size: 900 }], ""),
+    );
+    expect(content).toBe("alice (user-1): \n[user posted an image — a.png, image/png, 10x10, 900 B]");
+  });
+
+  it("includes alt text when the uploader set one", () => {
+    const content = triggerContent(
+      fakeImageMessage([
+        { url: "https://cdn.example/c.jpg", name: "c.jpg", contentType: "image/jpeg", width: 800, height: 600, size: 2_202_009, description: "my cat asleep" },
+      ]),
+    );
+    expect(content).toContain('alt text: "my cat asleep"');
+    expect(content).toContain("2.1 MB");
+  });
+
+  it("describes each image separately", () => {
+    const content = triggerContent(
+      fakeImageMessage([
+        { url: "https://cdn.example/1.png", name: "1.png", contentType: "image/png", width: 5, height: 5, size: 100 },
+        { url: "https://cdn.example/2.png", name: "2.png", contentType: "image/png", width: 6, height: 6, size: 200 },
+      ]),
+    );
+    expect(content).toBe(
+      "alice (user-1): look at this\n[user posted an image — 1.png, image/png, 5x5, 100 B]\n" +
+      "[user posted an image — 2.png, image/png, 6x6, 200 B]",
+    );
+  });
+});
+
+describe("image input enabled", () => {
+  it("attaches image parts alongside the metadata text", () => {
+    fakeEnv.imageInputEnabled = true;
+    try {
+      const content = triggerContent(
+        fakeImageMessage([
+          { url: "https://cdn.example/dog.png", name: "dog.png", contentType: "image/png", width: 1920, height: 1080, size: 250_880 },
+        ]),
+      ) as Array<Record<string, any>>;
+      expect(Array.isArray(content)).toBe(true);
+      expect(content[0].type).toBe("text");
+      expect(content[0].text).toContain("[user posted an image — dog.png, image/png, 1920x1080, 245 KB]");
+      expect(content[1]).toEqual({ type: "image_url", image_url: { url: "https://cdn.example/dog.png" } });
+    } finally {
+      fakeEnv.imageInputEnabled = false;
+    }
   });
 });
 

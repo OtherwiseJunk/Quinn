@@ -4,11 +4,12 @@ import type { GroqUsage } from "../groq/groqClient.js";
 // "passed through to underlying models") — verify against the first real
 // invoices during Phase 3 rollout.
 const RATES: Record<string, { input: number; output: number }> = {
+  // Decommissioned by Groq, kept so historical usage rows still price.
   "meta-llama/llama-4-scout-17b-16e-instruct": { input: 0.11 / 1e6, output: 0.34 / 1e6 },
   "openai/gpt-oss-120b": { input: 0.15 / 1e6, output: 0.6 / 1e6 },
   "groq/compound-mini": { input: 0.59 / 1e6, output: 0.79 / 1e6 },
 };
-const DEFAULT_RATE = RATES["meta-llama/llama-4-scout-17b-16e-instruct"];
+const DEFAULT_RATE = RATES["openai/gpt-oss-120b"];
 
 // Groq built-in search: $5–8 per 1k requests; assume the upper tier.
 const WEB_SEARCH_FLAT = 0.008;

@@ -1,6 +1,9 @@
 import type { Message } from "discord.js";
 import type { GroqRequestContext, BotMemory } from "@quinn/shared";
 import type { ChatCompletionMessageParam, ChatCompletionContentPart } from "groq-sdk/resources/chat/completions";
+import { env } from "../env.js";
+
+const IMAGE_PLACEHOLDER = "[user posted an image]";
 
 function formatDate(date: Date | string): string {
   return new Date(date).toISOString().slice(0, 10);
@@ -24,21 +27,74 @@ function isImageAttachment(a: { contentType: string | null; name: string; width:
   return false;
 }
 
-function collectImageUrls(msg: Message): string[] {
-  const urls: string[] = [];
+interface ImageRef {
+  url: string;
+  /** Text stand-in carrying everything a model that cannot see the image can still use. */
+  label: string;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Last path segment of a URL, for embeds where we have no attachment name. */
+function fileNameFromUrl(url: string): string | undefined {
+  try {
+    const name = new URL(url).pathname.split("/").pop();
+    return name && name !== "" ? decodeURIComponent(name) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function describeImage(meta: {
+  name?: string | null;
+  contentType?: string | null;
+  width?: number | null;
+  height?: number | null;
+  size?: number | null;
+  /** Discord's alt text — set by the uploader via the ALT button, usually null. */
+  description?: string | null;
+  spoiler?: boolean;
+}): string {
+  const details: string[] = [];
+  if (meta.name) details.push(meta.name);
+  if (meta.contentType) details.push(meta.contentType);
+  if (meta.width && meta.height) details.push(`${meta.width}x${meta.height}`);
+  if (meta.size) details.push(formatBytes(meta.size));
+  if (meta.spoiler) details.push("marked as a spoiler");
+  if (meta.description) details.push(`alt text: "${meta.description}"`);
+  return details.length > 0
+    ? `[user posted an image — ${details.join(", ")}]`
+    : IMAGE_PLACEHOLDER;
+}
+
+function collectImages(msg: Message): ImageRef[] {
+  const refs: ImageRef[] = [];
 
   // File uploads
   for (const a of msg.attachments.values()) {
-    if (isImageAttachment(a)) urls.push(a.url);
+    if (isImageAttachment(a)) refs.push({ url: a.url, label: describeImage(a) });
   }
 
   // Image embeds (when someone pastes an image URL in chat)
   for (const embed of msg.embeds) {
-    const url = embed.image?.url ?? (embed.data.type === "image" ? embed.thumbnail?.url : undefined);
-    if (url && !isGif({ url })) urls.push(url);
+    const image = embed.image ?? (embed.data.type === "image" ? embed.thumbnail : undefined);
+    const url = image?.url;
+    if (!url || isGif({ url })) continue;
+    refs.push({
+      url,
+      label: describeImage({
+        name: fileNameFromUrl(url),
+        width: image?.width,
+        height: image?.height,
+      }),
+    });
   }
 
-  return urls;
+  return refs;
 }
 
 /** "carol (333333333333333333)" — display name for conversation, snowflake for identity (names are user-controlled and spoofable). */
@@ -66,13 +122,19 @@ function buildUserContent(
     ? `[${formatRelativeTime(msg.createdTimestamp, nowMs)}] `
     : "";
   const text = `${prefix}${userLabel(msg)}: ${msg.content}`;
-  const imageUrls = collectImageUrls(msg);
-  if (imageUrls.length === 0) return text;
+  const images = collectImages(msg);
+  if (images.length === 0) return text;
+
+  // The metadata line goes in either way: with image input off it is all the
+  // model gets, and an image-only post would otherwise arrive as an empty line.
+  const described = [text, ...images.map((i) => i.label)].join("\n");
+  if (!env.imageInputEnabled) return described;
+
   return [
-    { type: "text" as const, text },
-    ...imageUrls.map((url) => ({
+    { type: "text" as const, text: described },
+    ...images.map((i) => ({
       type: "image_url" as const,
-      image_url: { url },
+      image_url: { url: i.url },
     })),
   ];
 }
@@ -91,7 +153,7 @@ export function stripImages(messages: ChatCompletionMessageParam[]): ChatComplet
     if (!Array.isArray(m.content)) return m;
     const parts = m.content as Array<{ type: string; text?: string }>;
     const rendered = parts.map((p) =>
-      p.type === "text" ? (p.text ?? "") : "[user posted an image]"
+      p.type === "text" ? (p.text ?? "") : IMAGE_PLACEHOLDER
     );
     return { ...m, content: rendered.join("\n") } as ChatCompletionMessageParam;
   });
